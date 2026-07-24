@@ -3,6 +3,8 @@
 #include "DataLoader.hpp"
 #include "BigramModel.hpp"
 
+using namespace std;
+
 int main() {
     Tokenizer tokenizer;
     if (!tokenizer.load_file("dataset/input.txt")) {
@@ -26,7 +28,7 @@ int main() {
 
     std::cout << "[*] Training Bigram Model...\n";
     float lr = 1.0f;
-    for (int step = 0; step < 1000; ++step) {
+    for (int step = 0; step < 2500; ++step) {
         loader.get_batch(X, Y);
         model.train_step(X, Y, lr);
 
@@ -36,8 +38,8 @@ int main() {
         }
     }
 
-    std::cout << "\n[+] Generating sample output after Bigram training:";
-    std::vector<int> sample_tokens = model.generate(0, 500);
+    std::cout << "\n[+] Generating sample output after Bigram training:" << endl;
+    std::vector<int> sample_tokens = model.generate(64, 1000);
     // for (int id : sample_tokens) {
     //     std::cout << id << " ";
     // }

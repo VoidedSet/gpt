@@ -18,4 +18,6 @@ add_executable(engine ${SOURCES}
     include/Tokenizer.hpp
     include/DataLoader.hpp
     src/Embedding.cpp
-    include/BigramModel.hpp)
+    include/BigramModel.hpp
+    include/Embedding.hpp
+    src/BigramModel.cpp)
