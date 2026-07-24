@@ -10,25 +10,25 @@
 #include <set>
 #include <algorithm>
 
-using namespace std;
-
 class Tokenizer {
-    private:
-        std::string raw_text;
-        std::vector<char> id_to_char;
-        std::unordered_map<char, int> char_to_id;
-        std::vector<int> tokens;
-        int vocab_size = 0;
+private:
+    std::string raw_text;
+    std::vector<char> id_to_char;
+    std::unordered_map<char, int> char_to_id;
+    std::vector<int> tokens;
+    int vocab_size = 0;
 
-    public:
-        bool load_file(const std::string& filepath);
-        void build_vocab();
-        void encode();
-        void print_sample_pair(int start_index, int block_size);
+public:
+    bool load_file(const std::string& filepath);
+    void build_vocab();
+    void encode();
+    std::string decode(const std::vector<int>& tokens);
+    
+    void print_sample_pair(int start_index, int block_size);
 
-        const string& get_raw_text(){
-            return raw_text;
-        }
+    const std::string& get_raw_text() const { return raw_text; }
+    const std::vector<int>& get_tokens() const { return tokens; }
+    int get_vocab_size() const { return vocab_size; }
 };
 
 #endif

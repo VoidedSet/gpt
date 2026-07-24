@@ -36,6 +36,17 @@ void Tokenizer::encode() {
     std::cout << "[+] Encoded " << tokens.size() << " tokens.\n";
 }
 
+std::string Tokenizer::decode(const std::vector<int>& tokens)
+{
+    std::string output;
+    output.reserve(tokens.size());
+
+    for (int token : tokens)
+        output += id_to_char[token];
+
+    return output;
+}
+
 void Tokenizer::print_sample_pair(int start_index, int block_size) {
     std::cout << "\n--- Sample Training Pair (block_size = " << block_size << ") ---\n";
     std::cout << "Input  (x): ";
