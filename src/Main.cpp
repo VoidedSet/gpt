@@ -1,11 +1,29 @@
-#include <iostream>
 #include "Tokenizer.hpp"
 #include "DataLoader.hpp"
 #include "BigramModel.hpp"
+#include "NastyTensors.hpp"
 
 using namespace std;
 
 int main() {
+    std::cout << "[*] Testing NastyTensors...\n";
+    NastyTensors t({2, 3}, 1.5f);
+    t(0, 1) = 9.9f;
+    t(1, 2) = -4.2f;
+    std::cout << "Original 2D tensor:\n";
+    t.print();
+
+    std::cout << "\nSlice at index 1:\n";
+    NastyTensors slice1 = t.slice(1);
+    slice1.print();
+    std::cout << "slice1(2) (should be -4.2000): " << slice1(2) << "\n";
+
+    std::cout << "\nModifying slice1(0) = 88.8...\n";
+    slice1(0) = 88.8f;
+    std::cout << "Original tensor after modifying slice (should show 88.8000 at row 1, col 0):\n";
+    t.print();
+    std::cout << "-----------------------------------\n\n";
+
     Tokenizer tokenizer;
     if (!tokenizer.load_file("dataset/input.txt")) {
         return 1;

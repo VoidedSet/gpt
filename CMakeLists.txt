@@ -20,4 +20,5 @@ add_executable(engine ${SOURCES}
     src/Embedding.cpp
     include/BigramModel.hpp
     include/Embedding.hpp
-    src/BigramModel.cpp)
+    src/BigramModel.cpp
+    include/NastyTensors.hpp)
