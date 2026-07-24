@@ -45,5 +45,16 @@ public:
     float& operator()(size_t i, size_t j, size_t k);
     const float& operator()(size_t i, size_t j, size_t k) const;
 
+    float& operator()(size_t i, size_t j, size_t k, size_t l);
+    const float& operator()(size_t i, size_t j, size_t k, size_t l) const;
+
     void print() const;
+};
+
+struct Parameter {
+    NastyTensors value;
+    NastyTensors grad;
+    Parameter() = default;
+    Parameter(const std::vector<size_t>& shape) 
+        : value(shape), grad(shape, 0.0f) {}
 };

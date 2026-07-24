@@ -4,6 +4,8 @@ project(Engine CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+find_package(OpenMP REQUIRED)
+
 if(MSVC)
     add_compile_options(/W4 /O2 /permissive-)
 else()
@@ -20,5 +22,11 @@ add_executable(engine ${SOURCES}
     src/Embedding.cpp
     include/BigramModel.hpp
     include/Embedding.hpp
-    src/BigramModel.cpp
-    include/NastyTensors.hpp)
+    include/NastyTensors.hpp
+    include/Ops.hpp
+    include/Attention.hpp
+    include/MLP.hpp
+    include/GPT.hpp
+    include/Optimizer.hpp)
+
+target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX)

@@ -16,13 +16,13 @@ NastyTensors::NastyTensors()
     : data_(nullptr), offset_(0), shape_({}), strides_({}) {}
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape) 
-    : shape_(shape), strides_(calculate_strides(shape)), offset_(0) {
+    : offset_(0), shape_(shape), strides_(calculate_strides(shape)) {
     size_t total_size = size();
     data_ = std::make_shared<std::vector<float>>(total_size, 0.0f);
 }
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape, float fill_value) 
-    : shape_(shape), strides_(calculate_strides(shape)), offset_(0) {
+    : offset_(0), shape_(shape), strides_(calculate_strides(shape)) {
     size_t total_size = size();
     data_ = std::make_shared<std::vector<float>>(total_size, fill_value);
 }
@@ -30,7 +30,7 @@ NastyTensors::NastyTensors(const std::vector<size_t>& shape, float fill_value)
 NastyTensors::NastyTensors(const std::vector<size_t>& shape, 
                            std::shared_ptr<std::vector<float>> data, 
                            size_t offset) 
-    : shape_(shape), strides_(calculate_strides(shape)), data_(data), offset_(offset) {}
+    : data_(data), offset_(offset), shape_(shape), strides_(calculate_strides(shape)) {}
 
 NastyTensors NastyTensors::clone() const {
     NastyTensors cloned(shape_);
@@ -90,6 +90,14 @@ float& NastyTensors::operator()(size_t i, size_t j, size_t k) {
 
 const float& NastyTensors::operator()(size_t i, size_t j, size_t k) const {
     return (*data_)[offset_ + i * strides_[0] + j * strides_[1] + k * strides_[2]];
+}
+
+float& NastyTensors::operator()(size_t i, size_t j, size_t k, size_t l) {
+    return (*data_)[offset_ + i * strides_[0] + j * strides_[1] + k * strides_[2] + l * strides_[3]];
+}
+
+const float& NastyTensors::operator()(size_t i, size_t j, size_t k, size_t l) const {
+    return (*data_)[offset_ + i * strides_[0] + j * strides_[1] + k * strides_[2] + l * strides_[3]];
 }
 
 void NastyTensors::print() const {
