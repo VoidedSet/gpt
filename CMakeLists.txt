@@ -16,4 +16,6 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 
 add_executable(engine ${SOURCES}
     include/Tokenizer.hpp
-    include/DataLoader.hpp)
+    include/DataLoader.hpp
+    src/Embedding.cpp
+    include/BigramModel.hpp)

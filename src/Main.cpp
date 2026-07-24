@@ -1,73 +1,50 @@
-
-#include <chrono>
 #include <iostream>
-#include <fstream>
-#include <sstream>
-#include <string>
-
 #include "Tokenizer.hpp"
 #include "DataLoader.hpp"
-
-using namespace std;
-
-struct Hyperparameters {
-    int B,
-        T;
-};
+#include "BigramModel.hpp"
 
 int main() {
-
     Tokenizer tokenizer;
-    Hyperparameters hp = {4, 8};
-    int B = hp.B, T = hp.T;
+    if (!tokenizer.load_file("dataset/input.txt")) {
+        return 1;
+    }
 
-    std::cout << "[*] Starting execution...\n";
+    tokenizer.build_vocab();
+    tokenizer.encode();
 
-    // timerrr
-    auto start = std::chrono::high_resolution_clock::now();
-    
-    if(tokenizer.load_file("dataset/input.txt")){
-        cout << tokenizer.get_raw_text().substr(0, 100) << endl;
-      
-        tokenizer.build_vocab();
-        tokenizer.encode();
-        
-        // vector<int> tokens = tokenizer.get_tokens();
+    int B = 32;
+    int T = 8;
+    DataLoader loader(tokenizer.get_tokens(), B, T);
+    BigramModel model(tokenizer.get_vocab_size());
 
-        // cout << endl << "First 20 tokens" << endl;
-        // for(int i = 0; i < 20; i++)
-        //     cout << tokens[i] << ", ";
+    std::vector<int> X, Y;
+    loader.get_batch(X, Y);
 
-        // cout << endl << "[-] Decoding Sample" << endl;
-        // std::cout << tokenizer.decode({18, 47, 56, 57, 58, 1, 15, 47, 58, 47, 64, 43, 52, 10, 0, 14, 43, 44, 53, 56}) << endl;
-        
-        // tokenizer.print_sample_pair(0, 8);
+    float initial_loss = model.compute_loss(X, Y);
+    std::cout << "\n[+] Initial Untrained Loss: " << initial_loss 
+              << " (Theoretical Random Target: ~4.17)\n";
 
-        DataLoader loader(tokenizer.get_tokens(), hp.B, hp.T);
-
-        vector<int> X, Y;
+    std::cout << "[*] Training Bigram Model...\n";
+    float lr = 1.0f;
+    for (int step = 0; step < 1000; ++step) {
         loader.get_batch(X, Y);
+        model.train_step(X, Y, lr);
 
-        std::cout << "\n================ BATCH VISUALIZATION (B=" << hp.B << ", T=" << hp.T << ") ================\n";
-        for (int b = 0; b < B; ++b) {
-            std::cout << "Batch " << b << " | Input  (X): ";
-            for (int t = 0; t < T; ++t) {
-                std::cout << X[b * T + t] << "\t";
-            }
-            std::cout << "\nBatch " << b << " | Target (Y): ";
-            for (int t = 0; t < T; ++t) {
-                std::cout << Y[b * T + t] << "\t";
-            }
-            std::cout << "\n------------------------------------------------------------------------\n";
+        if ((step + 1) % 200 == 0) {
+            float loss = model.compute_loss(X, Y);
+            std::cout << "    Step " << (step + 1) << " | Loss: " << loss << "\n";
         }
     }
 
-    //end of exec
+    std::cout << "\n[+] Generating sample output after Bigram training:";
+    std::vector<int> sample_tokens = model.generate(0, 500);
+    // for (int id : sample_tokens) {
+    //     std::cout << id << " ";
+    // }
 
-    auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::micro> elapsed = end - start;
-
-    std::cout << "[+] Completed in " << elapsed.count() / 1000 << " ms.\n";
+    std::cout << tokenizer.decode(sample_tokens);
+    
+    std::cout << "\n[+] Bigram Baseline Complete!\n";
 
     return 0;
 }
