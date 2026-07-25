@@ -6,23 +6,26 @@
 using namespace std;
 
 int main() {
-    std::cout << "[*] Testing NastyTensors...\n";
-    NastyTensors t({2, 3}, 1.5f);
-    t(0, 1) = 9.9f;
-    t(1, 2) = -4.2f;
-    std::cout << "Original 2D tensor:\n";
-    t.print();
 
-    std::cout << "\nSlice at index 1:\n";
-    NastyTensors slice1 = t.slice(1);
-    slice1.print();
-    std::cout << "slice1(2) (should be -4.2000): " << slice1(2) << "\n";
+    std::cout << "[*] testing matmul \n";
+    NastyTensors A({2, 2});
+    A(0, 0) = 1.0f; A(0, 1) = 2.0f;
+    A(1, 0) = 3.0f; A(1, 1) = 4.0f;
 
-    std::cout << "\nModifying slice1(0) = 88.8...\n";
-    slice1(0) = 88.8f;
-    std::cout << "Original tensor after modifying slice (should show 88.8000 at row 1, col 0):\n";
-    t.print();
-    std::cout << "-----------------------------------\n\n";
+    NastyTensors b({2, 2});
+    b(0, 0) = 5.0f; b(0, 1) = 6.0f;
+    b(1, 0) = 7.0f; b(1, 1) = 8.0f;
+
+    std::cout << "Matrix A with stride: \n";
+    A.print();
+
+    std::cout << "\nMatrix B with: \n";
+    b.print();
+
+    std::cout << "\n C = A.matmul(B)\n";
+    NastyTensors C = A.matmul(b);
+    C.print();
+
 
     Tokenizer tokenizer;
     if (!tokenizer.load_file("dataset/input.txt")) {

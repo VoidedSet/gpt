@@ -1,6 +1,7 @@
 #include "NastyTensors.hpp"
 #include <iostream>
 #include <iomanip>
+#include <cassert>
 
 std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& shape) {
     if (shape.empty()) return {};
@@ -92,8 +93,30 @@ const float& NastyTensors::operator()(size_t i, size_t j, size_t k) const {
     return (*data_)[offset_ + i * strides_[0] + j * strides_[1] + k * strides_[2]];
 }
 
-void NastyTensors::print() const {
-    std::cout << "NastyTensors(shape=[";
+NastyTensors NastyTensors::matmul(const NastyTensors &other) const
+{   
+    assert(this->ndim() == 2 && other.ndim() == 2 && "Not a 2d Matrix!");
+    assert(this->shape()[1] == other.shape()[0] && "Dimensions dont match");
+
+    size_t M = this->shape()[0], K = this->shape()[1], N = other.shape()[1];
+
+    NastyTensors output({M, N}, 0.0f);
+
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t k = 0; k < K; ++k) {
+            float val = (*this)(i, k);
+            for (size_t j = 0; j < N; ++j) {
+                output(i, j) += val * other(k, j);
+            }
+        }
+    }
+
+    return output;
+}
+
+void NastyTensors::print() const
+{
+    std::cout << "(shape=[";
     for (size_t i = 0; i < shape_.size(); ++i) {
         std::cout << shape_[i] << (i < shape_.size() - 1 ? ", " : "");
     }
