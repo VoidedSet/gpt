@@ -29,6 +29,11 @@ public:
     const std::string& get_raw_text() const { return raw_text; }
     const std::vector<int>& get_tokens() const { return tokens; }
     int get_vocab_size() const { return vocab_size; }
+    int char_to_token(char c) const {
+        auto it = char_to_id.find(c);
+        if (it != char_to_id.end()) return it->second;
+        return 0;
+    }
 };
 
 #endif

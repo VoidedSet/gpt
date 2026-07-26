@@ -30,4 +30,5 @@ public:
     float backward(const std::vector<int>& targets);
 
     std::vector<NastyTensors*> get_parameters();
+    std::vector<int> generate(const std::vector<int>& prompt, size_t max_new_tokens);
 };

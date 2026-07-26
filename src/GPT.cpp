@@ -1,6 +1,7 @@
 #include "GPT.hpp"
 #include <cmath>
 #include <cassert>
+#include <cstdlib>
 
 GPT::GPT(size_t vocab_size, size_t max_seq_len, size_t embedding_dim, size_t num_heads, size_t num_layers)
     : vocab_size_(vocab_size),
@@ -130,4 +131,50 @@ std::vector<NastyTensors*> GPT::get_parameters() {
     params.push_back(&ln_f_.gamma());
     params.push_back(&ln_f_.beta());
     return params;
+}
+
+std::vector<int> GPT::generate(const std::vector<int>& prompt, size_t max_new_tokens) {
+    std::vector<int> generated = prompt;
+    for (size_t i = 0; i < max_new_tokens; ++i) {
+        size_t start_idx = 0;
+        size_t len = generated.size();
+        if (len > max_seq_len_) {
+            start_idx = len - max_seq_len_;
+            len = max_seq_len_;
+        }
+        std::vector<int> input(generated.begin() + start_idx, generated.end());
+        
+        NastyTensors logits = forward(input, 1, len);
+        
+        float* logits_ptr = logits.data();
+        size_t last_row_offset = (len - 1) * vocab_size_;
+        
+        float max_logit = logits_ptr[last_row_offset];
+        for (size_t j = 1; j < vocab_size_; ++j) {
+            if (logits_ptr[last_row_offset + j] > max_logit) {
+                max_logit = logits_ptr[last_row_offset + j];
+            }
+        }
+        
+        std::vector<float> probs(vocab_size_);
+        float sum_prob = 0.0f;
+        for (size_t j = 0; j < vocab_size_; ++j) {
+            probs[j] = std::exp(logits_ptr[last_row_offset + j] - max_logit);
+            sum_prob += probs[j];
+        }
+        
+        float r = (static_cast<float>(rand()) / RAND_MAX) * sum_prob;
+        float running_sum = 0.0f;
+        int next_token = 0;
+        for (size_t j = 0; j < vocab_size_; ++j) {
+            running_sum += probs[j];
+            if (r <= running_sum) {
+                next_token = j;
+                break;
+            }
+        }
+        
+        generated.push_back(next_token);
+    }
+    return generated;
 }

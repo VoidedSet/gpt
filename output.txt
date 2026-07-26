@@ -1,0 +1,19 @@
+Total parameters: 28 learnable tensors.
+Time: 165.6 seconds (~2.7 minutes) on your sequential CPU thread.
+Speed: ~82 ms/step (~3,100 tokens/sec).
+Loss Profile: Down from 4.16 (untrained) to 2.06 at step 1,999.
+
+Output:
+
+The avling way.
+
+BANDIO:
+That tho Ius le se leno y ley risthy ith th go Ist anendjurrgipecker cho m!
+
+An sw allllles s. Aly; I I shele y Anchowebed,
+Y
+
+
+Gou mitkit bup.-strm, y,
+Yo  ITon
+Allughgh mwh--
