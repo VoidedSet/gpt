@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cassert>
 #include <cmath>
+#include <immintrin.h>
 
 std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& shape) {
     if (shape.empty()) return {};
@@ -114,11 +115,28 @@ NastyTensors NastyTensors::matmul(const NastyTensors &other) const
 
     NastyTensors output({M, N}, 0.0f);
 
+    const float* a = this->data();
+    const float* b = other.data();
+    float* c = output.data();
+
+    size_t lda = this->strides_[0];
+    size_t ldb = other.strides_[0];
+    size_t ldc = output.strides_[0];
+
+    #pragma omp parallel for
     for (size_t i = 0; i < M; ++i) {
         for (size_t k = 0; k < K; ++k) {
-            float val = (*this)(i, k);
-            for (size_t j = 0; j < N; ++j) {
-                output(i, j) += val * other(k, j);
+            float val = a[i * lda + k];
+            __m256 val_vec = _mm256_set1_ps(val);
+            size_t j = 0;
+            for (; j + 7 < N; j += 8) {
+                __m256 vb = _mm256_loadu_ps(b + k * ldb + j);
+                __m256 vc = _mm256_loadu_ps(c + i * ldc + j);
+                vc = _mm256_fmadd_ps(val_vec, vb, vc);
+                _mm256_storeu_ps(c + i * ldc + j, vc);
+            }
+            for (; j < N; ++j) {
+                c[i * ldc + j] += val * b[k * ldb + j];
             }
         }
     }
@@ -185,13 +203,37 @@ NastyTensors NastyTensors::matmul_transposed_b(const NastyTensors& other) const 
 
     NastyTensors output({M, N}, 0.0f);
 
+    const float* a = this->data();
+    const float* b = other.data();
+    float* c = output.data();
+
+    size_t lda = this->strides_[0];
+    size_t ldb = other.strides_[0];
+    size_t ldc = output.strides_[0];
+
+    #pragma omp parallel for collapse(2)
     for (size_t i = 0; i < M; ++i) {
         for (size_t j = 0; j < N; ++j) {
-            float dot = 0.0f;
-            for (size_t k = 0; k < K; ++k) {
-                dot += (*this)(i, k) * other(j, k);
+            const float* row_a = a + i * lda;
+            const float* row_b = b + j * ldb;
+
+            __m256 sum = _mm256_setzero_ps();
+            size_t k = 0;
+            for (; k + 7 < K; k += 8) {
+                __m256 va = _mm256_loadu_ps(row_a + k);
+                __m256 vb = _mm256_loadu_ps(row_b + k);
+                sum = _mm256_fmadd_ps(va, vb, sum);
             }
-            output(i, j) = dot;
+            
+            alignas(32) float temp[8];
+            _mm256_storeu_ps(temp, sum);
+            float dot = temp[0] + temp[1] + temp[2] + temp[3] + temp[4] + temp[5] + temp[6] + temp[7];
+            
+            for (; k < K; ++k) {
+                dot += row_a[k] * row_b[k];
+            }
+            
+            c[i * ldc + j] = dot;
         }
     }
 

@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(MSVC)
     add_compile_options(/W4 /O2 /permissive-)
 else()
-    add_compile_options(-Wall -Wextra -Wpedantic -O3 -march=native)
+    add_compile_options(-Wall -Wextra -Wpedantic -O3 -march=native -fopenmp)
 endif()
 
 include_directories(include)
@@ -28,3 +28,6 @@ add_executable(engine ${SOURCES}
     include/Block.hpp
     include/GPT.hpp
     include/Optimizer.hpp)
+
+find_package(OpenMP REQUIRED)
+target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX)
