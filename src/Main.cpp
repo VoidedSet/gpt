@@ -2,35 +2,38 @@
 #include "DataLoader.hpp"
 #include "BigramModel.hpp"
 #include "NastyTensors.hpp"
+#include "Embedding.hpp"
+
+#include <chrono>
+#include <iostream>
 
 using namespace std;
 
 int main() {
 
-    std::cout << "[*] testing matmul \n";
-    NastyTensors A({2, 2});
-    A(0, 0) = 1.0f; A(0, 1) = 2.0f;
-    A(1, 0) = 3.0f; A(1, 1) = 4.0f;
+    std::cout << "[*] Testing Embedding Layer...\n";
+    Embedding emb(10, 8, 4);
+    std::vector<int> test_tokens = {1, 3, 2, 4, 0, 5}; // B=2, T=3
+    NastyTensors emb_out = emb.forward(test_tokens, 2, 3);
+    std::cout << "Embedding Output shape: [" 
+              << emb_out.shape()[0] << ", " 
+              << emb_out.shape()[1] << ", " 
+              << emb_out.shape()[2] << "]\n";
+    emb_out.print();
 
-    NastyTensors b({2, 2});
-    b(0, 0) = 5.0f; b(0, 1) = 6.0f;
-    b(1, 0) = 7.0f; b(1, 1) = 8.0f;
+    std::cout << "Checking manual sum at (0, 0, 0):\n";
+    std::cout << "  wte(1, 0) = " << emb.wte()(1, 0) << "\n";
+    std::cout << "  wpe(0, 0) = " << emb.wpe()(0, 0) << "\n";
+    std::cout << "  sum       = " << emb.wte()(1, 0) + emb.wpe()(0, 0) << "\n";
+    std::cout << "  emb_out   = " << emb_out(0, 0, 0) << "\n";
+    std::cout << "-----------------------------------\n\n";
 
-    std::cout << "Matrix A with stride: \n";
-    A.print();
 
-    std::cout << "\nMatrix B with: \n";
-    b.print();
-
-    std::cout << "\n C = A.matmul(B)\n";
-    NastyTensors C = A.matmul(b);
-    C.print();
-
+    auto start = chrono::high_resolution_clock::now();
 
     Tokenizer tokenizer;
-    if (!tokenizer.load_file("dataset/input.txt")) {
+    if (!tokenizer.load_file("dataset/input.txt"))
         return 1;
-    }
 
     tokenizer.build_vocab();
     tokenizer.encode();
@@ -61,13 +64,13 @@ int main() {
 
     std::cout << "\n[+] Generating sample output after Bigram training:" << endl;
     std::vector<int> sample_tokens = model.generate(64, 1000);
-    // for (int id : sample_tokens) {
-    //     std::cout << id << " ";
-    // }
-
+ 
     std::cout << tokenizer.decode(sample_tokens);
     
-    std::cout << "\n[+] Bigram Baseline Complete!\n";
+    auto end = chrono::high_resolution_clock::now();
+    chrono::duration<double, micro> elapsed = end - start;
+
+    std::cout << "\n[+] Bigram Baseline Complete in " << elapsed.count() / 1000 << "ms! \n";
 
     return 0;
 }

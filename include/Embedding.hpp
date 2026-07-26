@@ -1,29 +1,24 @@
-#ifndef EMBEDDING_HPP
-#define EMBEDDING_HPP
+#pragma once
 
+#include "NastyTensors.hpp"
 #include <vector>
-#include <random>
-#include <cmath>
 
-class Embedding{
-    private:
-        int num_embeddings, // vocab or block size
-            embedding_dim;  // n_embd or C -> channel
-        std::vector<float> weights; // num_embd * embd_dim
+class Embedding {
+private:
+    size_t vocab_size_;
+    size_t max_seq_len_;
+    size_t embedding_dim_;
+    NastyTensors wte_;
+    NastyTensors wpe_;
 
-    public:
-        Embedding(int num_embeddings, int embedding_dim)
-            : num_embeddings(num_embeddings), embedding_dim(embedding_dim){
-            weights.resize(num_embeddings * embedding_dim);
+    void init_weights();
 
-            std::mt19937 gen(1337);
-            std::normal_distribution<float> dist(0.0f, 0.02f);
-            for(auto& w : weights)
-                w = dist(gen);   
-        }
-        void forward(const std::vector<int>& input_tokens, std::vector<float>& out_data);
+public:
+    Embedding(size_t vocab_size, size_t max_seq_len, size_t embedding_dim);
+    ~Embedding() = default;
 
-        const std::vector<float>& get_weights() const { return weights; }
+    NastyTensors forward(const std::vector<int>& input_tokens, size_t B, size_t T) const;
+
+    const NastyTensors& wte() const { return wte_; }
+    const NastyTensors& wpe() const { return wpe_; }
 };
-
-#endif
