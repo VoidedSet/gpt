@@ -5,6 +5,8 @@
 Embedding::Embedding(size_t vocab_size, size_t max_seq_len, size_t embedding_dim)
     : vocab_size_(vocab_size), max_seq_len_(max_seq_len), embedding_dim_(embedding_dim),
       wte_({vocab_size, embedding_dim}), wpe_({max_seq_len, embedding_dim}) {
+    wte_.init_grad();
+    wpe_.init_grad();
     init_weights();
 }
 
@@ -29,6 +31,8 @@ NastyTensors Embedding::forward(const std::vector<int>& input_tokens, size_t B, 
     assert(input_tokens.size() == B * T && "Invalid BxT Size.");
     assert(T <= max_seq_len_ && "Token Size Exceeded");
 
+    input_tokens_ = input_tokens;
+
     NastyTensors output({B, T, embedding_dim_});
 
     for (size_t b = 0; b < B; ++b) {
@@ -42,4 +46,26 @@ NastyTensors Embedding::forward(const std::vector<int>& input_tokens, size_t B, 
     }
 
     return output;
+}
+
+void Embedding::backward(const NastyTensors& dY) {
+    assert(dY.ndim() == 3);
+    size_t B = dY.shape()[0];
+    size_t T = dY.shape()[1];
+    size_t C = dY.shape()[2];
+    assert(C == embedding_dim_);
+
+    float* wte_g = wte_.grad();
+    float* wpe_g = wpe_.grad();
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t t = 0; t < T; ++t) {
+            int token_id = input_tokens_[b * T + t];
+            for (size_t c = 0; c < C; ++c) {
+                float dy = dY(b, t, c);
+                wte_g[token_id * C + c] += dy;
+                wpe_g[t * C + c] += dy;
+            }
+        }
+    }
 }

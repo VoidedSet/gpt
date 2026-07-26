@@ -15,24 +15,25 @@ std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& s
 }
 
 NastyTensors::NastyTensors() 
-    : data_(nullptr), offset_(0), shape_({}), strides_({}) {}
+    : data_(nullptr), grad_(nullptr), offset_(0), shape_({}), strides_({}) {}
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape) 
-    : shape_(shape), strides_(calculate_strides(shape)), offset_(0) {
+    : data_(nullptr), grad_(nullptr), offset_(0), shape_(shape), strides_(calculate_strides(shape)) {
     size_t total_size = size();
     data_ = std::make_shared<std::vector<float>>(total_size, 0.0f);
 }
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape, float fill_value) 
-    : shape_(shape), strides_(calculate_strides(shape)), offset_(0) {
+    : data_(nullptr), grad_(nullptr), offset_(0), shape_(shape), strides_(calculate_strides(shape)) {
     size_t total_size = size();
     data_ = std::make_shared<std::vector<float>>(total_size, fill_value);
 }
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape, 
                            std::shared_ptr<std::vector<float>> data, 
+                           std::shared_ptr<std::vector<float>> grad, 
                            size_t offset) 
-    : shape_(shape), strides_(calculate_strides(shape)), data_(data), offset_(offset) {}
+    : data_(data), grad_(grad), offset_(offset), shape_(shape), strides_(calculate_strides(shape)) {}
 
 NastyTensors NastyTensors::clone() const {
     NastyTensors cloned(shape_);
@@ -42,6 +43,16 @@ NastyTensors NastyTensors::clone() const {
     if (src && dest) {
         for (size_t i = 0; i < num_elements; ++i) {
             dest[i] = src[i];
+        }
+    }
+    if (this->grad_) {
+        cloned.init_grad();
+        float* dest_g = cloned.grad();
+        const float* src_g = this->grad();
+        if (src_g && dest_g) {
+            for (size_t i = 0; i < num_elements; ++i) {
+                dest_g[i] = src_g[i];
+            }
         }
     }
     return cloned;
@@ -58,7 +69,7 @@ NastyTensors NastyTensors::slice(size_t index) const {
     std::vector<size_t> new_shape(shape_.begin() + 1, shape_.end());
     size_t new_offset = offset_ + index * strides_[0];
     
-    return NastyTensors(new_shape, data_, new_offset);
+    return NastyTensors(new_shape, data_, grad_, new_offset);
 }
 
 size_t NastyTensors::size() const {
@@ -124,6 +135,67 @@ void NastyTensors::gelu() {
         ptr[i] = 0.5f * x * (1.0f + std::tanh(0.79788456f * (x + 0.044715f * x * x * x)));
     }
 
+}
+
+NastyTensors NastyTensors::reshape(const std::vector<size_t>& new_shape) const {
+    size_t new_size = 1;
+    for (size_t dim : new_shape) new_size *= dim;
+    if (new_size != this->size()) {
+        throw std::runtime_error("Cannot reshape: size mismatch.");
+    }
+    return NastyTensors(new_shape, data_, grad_, offset_);
+}
+
+NastyTensors& NastyTensors::operator+=(const NastyTensors& other) {
+    assert(this->size() == other.size());
+    float* dest = this->data();
+    const float* src = other.data();
+    size_t n = this->size();
+    if (dest && src) {
+        for (size_t i = 0; i < n; ++i) {
+            dest[i] += src[i];
+        }
+    }
+    return *this;
+}
+
+void NastyTensors::init_grad() {
+    if (!grad_ && data_) {
+        grad_ = std::make_shared<std::vector<float>>(data_->size(), 0.0f);
+    }
+}
+
+void NastyTensors::zero_grad() {
+    if (grad_) {
+        float* g = grad();
+        size_t n = size();
+        if (g) {
+            std::fill(g, g + n, 0.0f);
+        }
+    }
+}
+
+NastyTensors NastyTensors::matmul_transposed_b(const NastyTensors& other) const {
+    assert(this->ndim() == 2 && other.ndim() == 2);
+    assert(this->shape()[1] == other.shape()[1]);
+
+    size_t M = this->shape()[0];
+    size_t K = this->shape()[1];
+    size_t N = other.shape()[0];
+
+    NastyTensors output({M, N}, 0.0f);
+
+    for (size_t i = 0; i < M; ++i) {
+        for (size_t j = 0; j < N; ++j) {
+            float dot = 0.0f;
+            for (size_t k = 0; k < K; ++k) {
+                dot += (*this)(i, k) * other(j, k);
+            }
+            output(i, j) = dot;
+        }
+    }
+
+    return output;
 }
 
 void NastyTensors::print() const

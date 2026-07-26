@@ -9,6 +9,7 @@
 class NastyTensors {
 private:
     std::shared_ptr<std::vector<float>> data_;
+    std::shared_ptr<std::vector<float>> grad_;
     size_t offset_ = 0;
     std::vector<size_t> shape_;
     std::vector<size_t> strides_;
@@ -21,6 +22,7 @@ public:
     NastyTensors(const std::vector<size_t>& shape, float fill_value);
     NastyTensors(const std::vector<size_t>& shape, 
                  std::shared_ptr<std::vector<float>> data, 
+                 std::shared_ptr<std::vector<float>> grad, 
                  size_t offset);
     ~NastyTensors() = default;
 
@@ -28,6 +30,9 @@ public:
     NastyTensors slice(size_t index) const;
     NastyTensors matmul(const NastyTensors& other) const;
     void gelu();
+    NastyTensors reshape(const std::vector<size_t>& new_shape) const;
+    NastyTensors& operator+=(const NastyTensors& other);
+    NastyTensors matmul_transposed_b(const NastyTensors& other) const;
 
     const std::vector<size_t>& shape() const { return shape_; }
     const std::vector<size_t>& strides() const { return strides_; }
@@ -37,6 +42,12 @@ public:
 
     float* data() { return data_ ? (data_->data() + offset_) : nullptr; }
     const float* data() const { return data_ ? (data_->data() + offset_) : nullptr; }
+
+    float* grad() { return grad_ ? (grad_->data() + offset_) : nullptr; }
+    const float* grad() const { return grad_ ? (grad_->data() + offset_) : nullptr; }
+
+    void init_grad();
+    void zero_grad();
 
     float& operator()(size_t i);
     const float& operator()(size_t i) const;

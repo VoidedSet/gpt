@@ -22,4 +22,9 @@ add_executable(engine ${SOURCES}
     include/Embedding.hpp
     src/BigramModel.cpp
     include/NastyTensors.hpp
-    include/LayerNorm.hpp)
+    include/LayerNorm.hpp
+    include/CausalSelfAttention.hpp
+    include/FeedForward.hpp
+    include/Block.hpp
+    include/GPT.hpp
+    include/Optimizer.hpp)
