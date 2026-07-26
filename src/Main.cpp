@@ -3,6 +3,7 @@
 #include "BigramModel.hpp"
 #include "NastyTensors.hpp"
 #include "Embedding.hpp"
+#include "LayerNorm.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -26,6 +27,33 @@ int main() {
     std::cout << "  wpe(0, 0) = " << emb.wpe()(0, 0) << "\n";
     std::cout << "  sum       = " << emb.wte()(1, 0) + emb.wpe()(0, 0) << "\n";
     std::cout << "  emb_out   = " << emb_out(0, 0, 0) << "\n";
+    std::cout << "-----------------------------------\n\n";
+
+    std::cout << "[*] Testing LayerNorm (In-place)...\n";
+    LayerNorm ln(4);
+    ln.forward(emb_out);
+    std::cout << "Normalized Embedding Output:\n";
+    emb_out.print();
+
+    std::cout << "Verifying mean and variance for Batch 0:\n";
+    for (size_t t = 0; t < 3; ++t) {
+        float sum = 0.0f;
+        for (size_t c = 0; c < 4; ++c) {
+            sum += emb_out(0, t, c);
+        }
+        float mean = sum / 4.0f;
+
+        float sum_sq_diff = 0.0f;
+        for (size_t c = 0; c < 4; ++c) {
+            float diff = emb_out(0, t, c) - mean;
+            sum_sq_diff += diff * diff;
+        }
+        float var = sum_sq_diff / 4.0f;
+
+        std::cout << "  t = " << t 
+                  << " | Mean = " << (std::abs(mean) < 1e-5f ? 0.0f : mean)
+                  << " | Var = " << var << "\n";
+    }
     std::cout << "-----------------------------------\n\n";
 
 
