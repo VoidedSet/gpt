@@ -56,6 +56,21 @@ int main() {
     }
     std::cout << "-----------------------------------\n\n";
 
+    std::cout << "[*] Testing GELU Activation (In-place)...\n";
+    NastyTensors test_gelu({5});
+    test_gelu(0) = -2.0f;
+    test_gelu(1) = -1.0f;
+    test_gelu(2) = 0.0f;
+    test_gelu(3) = 1.0f;
+    test_gelu(4) = 2.0f;
+    std::cout << "Before GELU:\n";
+    test_gelu.print();
+    
+    test_gelu.gelu();
+    std::cout << "After GELU (expected: [-0.0454, -0.1587, 0.0000, 0.8413, 1.9546]):\n";
+    test_gelu.print();
+    std::cout << "-----------------------------------\n\n";
+
 
     auto start = chrono::high_resolution_clock::now();
 

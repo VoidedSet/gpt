@@ -2,6 +2,7 @@
 #include <iostream>
 #include <iomanip>
 #include <cassert>
+#include <cmath>
 
 std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& shape) {
     if (shape.empty()) return {};
@@ -112,6 +113,17 @@ NastyTensors NastyTensors::matmul(const NastyTensors &other) const
     }
 
     return output;
+}
+
+void NastyTensors::gelu() {
+    float* ptr = data();
+    size_t n = size();
+    if (!ptr) return;
+    for (size_t i = 0; i < n; ++i) {
+        float x = ptr[i];
+        ptr[i] = 0.5f * x * (1.0f + std::tanh(0.79788456f * (x + 0.044715f * x * x * x)));
+    }
+
 }
 
 void NastyTensors::print() const

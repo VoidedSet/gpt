@@ -27,6 +27,7 @@ public:
     NastyTensors clone() const;
     NastyTensors slice(size_t index) const;
     NastyTensors matmul(const NastyTensors& other) const;
+    void gelu();
 
     const std::vector<size_t>& shape() const { return shape_; }
     const std::vector<size_t>& strides() const { return strides_; }
