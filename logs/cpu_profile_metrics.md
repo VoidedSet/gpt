@@ -74,12 +74,12 @@ E many to ach pplt: s conqurgopy vees d cher h, fotrvishiat t it
   -----------------------------------------------------
 
 
-[+] Training completed in 282.894 seconds.
+[+] Training completed in 348.894 seconds.
 
 --- Generating with final trained model ---
 The bor rgrovee tou ont, prcos;
 Wan ouge, I ch w avuss, llla y w yser t tiichey'sur tan slenewisurerigouuth he ter if sig mo arwive?
-Hue, me, oven o y d t ave
+Thou, shall come, oven o y d t ave
 heryh ys, h w tin ban he erebr t th y anefree
 -------------------------------------
 
