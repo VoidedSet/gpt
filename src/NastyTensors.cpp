@@ -5,6 +5,8 @@
 #include <cmath>
 #include <immintrin.h>
 
+#include <cuda_runtime.h>
+
 std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& shape) {
     if (shape.empty()) return {};
     std::vector<size_t> strides(shape.size());
@@ -32,9 +34,11 @@ NastyTensors::NastyTensors(const std::vector<size_t>& shape, float fill_value)
 
 NastyTensors::NastyTensors(const std::vector<size_t>& shape, 
                            std::shared_ptr<std::vector<float>> data, 
-                           std::shared_ptr<std::vector<float>> grad, 
+                           std::shared_ptr<std::vector<float>> grad,
+                           std::shared_ptr<float> d_data, 
+                           std::shared_ptr<float> d_grad,  
                            size_t offset) 
-    : data_(data), grad_(grad), offset_(offset), shape_(shape), strides_(calculate_strides(shape)) {}
+    : data_(data), grad_(grad), d_data_(d_data), d_grad_(d_grad), offset_(offset), shape_(shape), strides_(calculate_strides(shape)) {}
 
 NastyTensors NastyTensors::clone() const {
     NastyTensors cloned(shape_);
@@ -70,7 +74,7 @@ NastyTensors NastyTensors::slice(size_t index) const {
     std::vector<size_t> new_shape(shape_.begin() + 1, shape_.end());
     size_t new_offset = offset_ + index * strides_[0];
     
-    return NastyTensors(new_shape, data_, grad_, new_offset);
+    return NastyTensors(new_shape, data_, grad_, d_data_, d_grad_, new_offset);
 }
 
 size_t NastyTensors::size() const {
@@ -161,7 +165,7 @@ NastyTensors NastyTensors::reshape(const std::vector<size_t>& new_shape) const {
     if (new_size != this->size()) {
         throw std::runtime_error("Cannot reshape: size mismatch.");
     }
-    return NastyTensors(new_shape, data_, grad_, offset_);
+    return NastyTensors(new_shape, data_, grad_, d_data_, d_grad_, offset_);
 }
 
 NastyTensors& NastyTensors::operator+=(const NastyTensors& other) {
@@ -282,4 +286,34 @@ void NastyTensors::print() const
         }
         std::cout << "\n";
     }
+}
+
+void NastyTensors::to_gpu(int type)
+{
+    if(type == DATA_){
+        if(!d_data_){
+            float* raw_gpu_ptr = nullptr;
+            cudaMalloc(&raw_gpu_ptr, (size() * sizeof(float)));
+            d_data_ = std::shared_ptr<float>(raw_gpu_ptr, [](float* p){
+                if(p) cudaFree(p);
+            });
+        }        
+        cudaMemcpy(d_data_.get(), data(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
+    } else if(type == GRAD_){
+        if(!d_grad_){
+            float* raw_gpu_ptr = nullptr;
+            cudaMalloc(&raw_gpu_ptr, (size() * sizeof(float)));
+            d_grad_ = std::shared_ptr<float>(raw_gpu_ptr, [](float* p){
+                if (p) cudaFree(p);
+            });
+        }
+        cudaMemcpy(d_grad_.get(), grad(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
+    }
+}
+
+void NastyTensors::to_cpu(int type){
+    if(type == DATA_ && d_data_)
+        cudaMemcpy(data(), d_data_.get(), (size() * sizeof(float)), cudaMemcpyDeviceToHost);
+    else if(type == GRAD_ && d_grad_)
+        cudaMemcpy(grad(), d_grad_.get(), (size() * sizeof(float)), cudaMemcpyDeviceToHost);
 }

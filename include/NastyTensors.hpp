@@ -1,5 +1,8 @@
 #pragma once
 
+#define DATA_ 0
+#define GRAD_ 1
+
 #include <vector>
 #include <memory>
 #include <initializer_list>
@@ -10,6 +13,8 @@ class NastyTensors {
 private:
     std::shared_ptr<std::vector<float>> data_;
     std::shared_ptr<std::vector<float>> grad_;
+
+    std::shared_ptr<float> d_data_, d_grad_;
     size_t offset_ = 0;
     std::vector<size_t> shape_;
     std::vector<size_t> strides_;
@@ -23,6 +28,8 @@ public:
     NastyTensors(const std::vector<size_t>& shape, 
                  std::shared_ptr<std::vector<float>> data, 
                  std::shared_ptr<std::vector<float>> grad, 
+                 std::shared_ptr<float> d_data, 
+                 std::shared_ptr<float> d_grad, 
                  size_t offset);
     ~NastyTensors() = default;
 
@@ -40,6 +47,18 @@ public:
     size_t ndim() const { return shape_.size(); }
     size_t size() const;
 
+    // == CUDA WRAPPERS == //
+    void to_gpu(int type);
+    void to_cpu(int type);
+
+    float* device_data() {return d_data_ ? (d_data_.get() + offset_) : nullptr; }
+    const float* device_data() const { return d_data_ ? (d_data_.get() + offset_) : nullptr; }
+
+    float* device_grad() { return d_grad_ ? (d_grad_.get() + offset_) : nullptr; }
+    const float* device_grad() const { return d_grad_ ? (d_grad_.get() + offset_) : nullptr; }
+    
+    // == END OF CUDA WRAPPERS == //
+    
     float* data() { return data_ ? (data_->data() + offset_) : nullptr; }
     const float* data() const { return data_ ? (data_->data() + offset_) : nullptr; }
 

@@ -4,6 +4,8 @@ project(Engine CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+enable_language(CUDA)
+
 if(MSVC)
     add_compile_options(/W4 /O2 /permissive-)
 else()
@@ -12,7 +14,7 @@ endif()
 
 include_directories(include)
 
-file(GLOB_RECURSE SOURCES "src/*.cpp")
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.cu")
 
 add_executable(engine ${SOURCES}
     include/Tokenizer.hpp
@@ -27,7 +29,10 @@ add_executable(engine ${SOURCES}
     include/FeedForward.hpp
     include/Block.hpp
     include/GPT.hpp
-    include/Optimizer.hpp)
+    include/Optimizer.hpp
+    src/CudaKernels.cu
+    include/CudaKernels.hpp)
 
 find_package(OpenMP REQUIRED)
-target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX)
+find_package(CUDAToolkit REQUIRED)
+target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX CUDA::cudart)
