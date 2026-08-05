@@ -195,6 +195,8 @@ void NastyTensors::zero_grad() {
             std::fill(g, g + n, 0.0f);
         }
     }
+    if(d_grad_)
+        cudaMemset(d_grad_.get(), 0, size() * sizeof(float));
 }
 
 NastyTensors NastyTensors::matmul_transposed_b(const NastyTensors& other) const {
