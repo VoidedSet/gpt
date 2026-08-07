@@ -48,7 +48,11 @@ void display_char(char c) {
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
+  // Wait up to 3 seconds for Serial connection to be established (only on native USB)
+  for (int i = 0; i < 30; ++i) {
+    if (Serial) break;
+    delay(100);
+  }
   
   Serial.println("\n==================================");
   Serial.println("ESP32-S3 Macbeth GPT Inference Engine");
