@@ -26,9 +26,13 @@
 
 // --- Display Constructor Choice ---
 // For 1.3" OLEDs, SH1106 is the most common driver.
-// If your screen is garbled or blank, try uncommenting the SSD1306 driver below instead.
 U8X8_SH1106_128X64_NONAME_HW_I2C u8x8(/* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA);
-// U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(/* reset=*/ U8X8_PIN_NONE, /* clock=*/ OLED_SCL, /* data=*/ OLED_SDA);
+
+// Setup U8X8LOG for automatic wrapping and scrolling
+U8X8LOG u8x8log;
+#define U8LOG_WIDTH 16
+#define U8LOG_HEIGHT 8
+uint8_t u8log_buffer[U8LOG_WIDTH * U8LOG_HEIGHT];
 
 GPTInference model;
 int* tokens = nullptr;
@@ -39,12 +43,7 @@ float* logits = nullptr;
 void display_char(char c) {
   Serial.print(c);
   if (c == '\r') return;
-  
-  if (c == '\n') {
-    u8x8.println();
-  } else {
-    u8x8.print(c);
-  }
+  u8x8log.print(c);
 }
 
 void setup() {
@@ -98,6 +97,10 @@ void setup() {
   
   delay(3000);
   u8x8.clear();
+
+  // Initialize U8X8LOG text console
+  u8x8log.begin(u8x8, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
+  u8x8log.setRedrawMode(0); // 0 = redraw line-by-line, fast!
 
   // Allocate token buffer and logits buffer
   tokens = (int*)malloc(model.config.max_seq_len * sizeof(int));
