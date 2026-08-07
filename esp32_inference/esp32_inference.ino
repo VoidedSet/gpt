@@ -92,19 +92,23 @@ void setup() {
 
   u8x8.clear();
   u8x8.drawString(0, 0, "Model loaded!");
-  u8x8.drawString(0, 2, "Vocab Size: ");
-  u8x8.print(model.config.vocab_size);
-  u8x8.drawString(0, 3, "Layers:     ");
-  u8x8.print(model.config.num_layers);
-  u8x8.drawString(0, 4, "Dim:        ");
-  u8x8.print(model.config.embedding_dim);
+  
+  char buf[32];
+  snprintf(buf, sizeof(buf), "Vocab Size: %d", model.config.vocab_size);
+  u8x8.drawString(0, 2, buf);
+  
+  snprintf(buf, sizeof(buf), "Layers:     %d", model.config.num_layers);
+  u8x8.drawString(0, 3, buf);
+  
+  snprintf(buf, sizeof(buf), "Dim:        %d", model.config.embedding_dim);
+  u8x8.drawString(0, 4, buf);
   
   delay(3000);
   u8x8.clear();
 
   // Initialize U8X8LOG text console
   u8x8log.begin(u8x8, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
-  u8x8log.setRedrawMode(0); // 0 = redraw line-by-line, fast!
+  u8x8log.setRedrawMode(1); // 1 = redraw immediately on every character!
 
   // Allocate token buffer and logits buffer
   tokens = (int*)malloc(model.config.max_seq_len * sizeof(int));
