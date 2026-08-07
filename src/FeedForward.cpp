@@ -1,4 +1,6 @@
 #include "FeedForward.hpp"
+#include "CudaKernels.hpp"
+#include <cuda_runtime.h>
 #include <random>
 #include <cmath>
 #include <cassert>
@@ -41,6 +43,22 @@ NastyTensors FeedForward::forward(const NastyTensors& X) const {
     size_t T = X.shape()[1];
     size_t C = X.shape()[2];
 
+    if (w_fc_.device_data() != nullptr) {
+        x_2d_ = X.reshape({B * T, C}).clone();
+        x_2d_.to_gpu(DATA_);
+
+        h1_2d_ = x_2d_.matmul(w_fc_);
+        launch_add_bias(h1_2d_.device_data(), b_fc_.device_data(), B * T, 4 * C);
+
+        h2_2d_ = h1_2d_.clone();
+        h2_2d_.gelu();
+
+        NastyTensors y_2d = h2_2d_.matmul(w_proj_);
+        launch_add_bias(y_2d.device_data(), b_proj_.device_data(), B * T, C);
+
+        return y_2d.reshape({B, T, C});
+    }
+
     x_2d_ = X.reshape({B * T, C}).clone();
 
     h1_2d_ = x_2d_.matmul(w_fc_);
@@ -75,6 +93,49 @@ void FeedForward::backward(const NastyTensors& dY, NastyTensors& dX) {
     size_t T = dY.shape()[1];
     size_t C = dY.shape()[2];
     assert(C == embedding_dim_);
+
+    if (w_fc_.device_data() != nullptr) {
+        w_proj_.to_gpu(GRAD_);
+        b_proj_.to_gpu(GRAD_);
+        w_fc_.to_gpu(GRAD_);
+        b_fc_.to_gpu(GRAD_);
+        dX.to_gpu(DATA_);
+
+        NastyTensors dY_2d = dY.reshape({B * T, C});
+
+        NastyTensors dh2_2d = dY_2d.matmul_transposed_b(w_proj_);
+
+        NastyTensors::gemm(true, false, 
+                           4 * C, C, B * T, 
+                           1.0f, 
+                           h2_2d_.device_data(), 4 * C, 
+                           dY_2d.device_data(), C, 
+                           1.0f, 
+                           w_proj_.device_grad(), C);
+
+        launch_accumulate_bias_grad(dY_2d.device_data(), b_proj_.device_grad(), B * T, C);
+
+        NastyTensors dh1_2d({B * T, 4 * C});
+        dh1_2d.to_gpu(DATA_);
+        launch_gelu_backward(h1_2d_.device_data(), dh2_2d.device_data(), dh1_2d.device_data(), B * T * 4 * C);
+
+        NastyTensors dX_2d = dh1_2d.matmul_transposed_b(w_fc_);
+
+        NastyTensors::gemm(true, false, 
+                           C, 4 * C, B * T, 
+                           1.0f, 
+                           x_2d_.device_data(), C, 
+                           dh1_2d.device_data(), 4 * C, 
+                           1.0f, 
+                           w_fc_.device_grad(), 4 * C);
+
+        launch_accumulate_bias_grad(dh1_2d.device_data(), b_fc_.device_grad(), B * T, 4 * C);
+
+        NastyTensors dX_reshaped = dX_2d.reshape({B, T, C});
+        cudaMemcpy(dX.device_data(), dX_reshaped.device_data(), B * T * C * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        return;
+    }
 
     NastyTensors dY_2d = dY.reshape({B * T, C});
 

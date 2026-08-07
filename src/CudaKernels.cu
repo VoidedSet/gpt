@@ -169,3 +169,35 @@ void launch_gelu_backward(const float* h1, const float* dh2, float* dh1, int N) 
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
     gelu_backward_kernel<<<blocksPerGrid, threadsPerBlock>>>(h1, dh2, dh1, N);
 }
+
+__global__ void add_bias_kernel(float* X, const float* bias, int rows, int cols) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < rows * cols) {
+        int col = idx % cols;
+        X[idx] += bias[col];
+    }
+}
+
+__global__ void accumulate_bias_grad_kernel(const float* dY, float* dbias, int rows, int cols) {
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col < cols) {
+        float sum = 0.0f;
+        for (int r = 0; r < rows; ++r) {
+            sum += dY[r * cols + col];
+        }
+        atomicAdd(&dbias[col], sum);
+    }
+}
+
+void launch_add_bias(float* X, const float* bias, int rows, int cols) {
+    int threadsPerBlock = 256;
+    int N = rows * cols;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    add_bias_kernel<<<blocksPerGrid, threadsPerBlock>>>(X, bias, rows, cols);
+}
+
+void launch_accumulate_bias_grad(const float* dY, float* dbias, int rows, int cols) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (cols + threadsPerBlock - 1) / threadsPerBlock;
+    accumulate_bias_grad_kernel<<<blocksPerGrid, threadsPerBlock>>>(dY, dbias, rows, cols);
+}

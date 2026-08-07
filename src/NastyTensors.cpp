@@ -363,3 +363,22 @@ void NastyTensors::to_cpu(int type){
     else if(type == GRAD_ && d_grad_)
         cudaMemcpy(grad(), d_grad_.get(), (size() * sizeof(float)), cudaMemcpyDeviceToHost);
 }
+
+void NastyTensors::gemm(bool transA, bool transB,
+                        size_t M, size_t N, size_t K,
+                        float alpha,
+                        const float* A, size_t lda,
+                        const float* B, size_t ldb,
+                        float beta,
+                        float* C, size_t ldc) {
+    cublasHandle_t handle = get_cublas_handle();
+    cublasOperation_t opA = transA ? CUBLAS_OP_T : CUBLAS_OP_N;
+    cublasOperation_t opB = transB ? CUBLAS_OP_T : CUBLAS_OP_N;
+    cublasSgemm(handle, opB, opA, 
+                static_cast<int>(N), static_cast<int>(M), static_cast<int>(K), 
+                &alpha, 
+                B, static_cast<int>(ldb), 
+                A, static_cast<int>(lda), 
+                &beta, 
+                C, static_cast<int>(ldc));
+}

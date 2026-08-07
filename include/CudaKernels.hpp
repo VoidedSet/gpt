@@ -18,3 +18,6 @@ void launch_layernorm_backward(const float* dY, const float* x_hat, const float*
 
 void launch_gelu_forward(float* X, int N);
 void launch_gelu_backward(const float* h1, const float* dh2, float* dh1, int N);
+
+void launch_add_bias(float* X, const float* bias, int rows, int cols);
+void launch_accumulate_bias_grad(const float* dY, float* dbias, int rows, int cols);

@@ -51,6 +51,14 @@ public:
     void to_gpu(int type);
     void to_cpu(int type);
 
+    static void gemm(bool transA, bool transB,
+                     size_t M, size_t N, size_t K,
+                     float alpha,
+                     const float* A, size_t lda,
+                     const float* B, size_t ldb,
+                     float beta,
+                     float* C, size_t ldc);
+
     float* device_data() {return d_data_ ? (d_data_.get() + offset_) : nullptr; }
     const float* device_data() const { return d_data_ ? (d_data_.get() + offset_) : nullptr; }
 
