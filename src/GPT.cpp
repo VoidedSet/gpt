@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 
 GPT::GPT(size_t vocab_size, size_t max_seq_len, size_t embedding_dim, size_t num_heads, size_t num_layers)
     : vocab_size_(vocab_size),
@@ -231,7 +232,7 @@ std::vector<int> GPT::generate(const std::vector<int>& prompt, size_t max_new_to
     return generated;
 }
 
-bool GPT::save_binary(const std::string& filepath, const std::vector<char>& id_to_char) const {
+bool GPT::save_binary(const std::string& filepath, const Tokenizer& tokenizer, int quantization_level) const {
     std::ofstream out(filepath, std::ios::binary);
     if (!out.is_open()) {
         std::cerr << "[-] Error: Failed to open file for saving model weights: " << filepath << "\n";
@@ -239,12 +240,14 @@ bool GPT::save_binary(const std::string& filepath, const std::vector<char>& id_t
     }
 
     int magic = 0x47505432; // 'GPT2' in ASCII hex
-    int version = 1;
+    int version = 2; // Bump version to 2 for BPE/Quantization support
     int vocab_size = static_cast<int>(vocab_size_);
     int max_seq_len = static_cast<int>(max_seq_len_);
     int embedding_dim = static_cast<int>(embedding_dim_);
     int num_heads = static_cast<int>(num_heads_);
     int num_layers = static_cast<int>(num_layers_);
+    int tok_type = static_cast<int>(tokenizer.get_type()); // 0 = CHAR, 1 = BPE
+    int quant_level = quantization_level; // 0 = FP32, 1 = BF16, 2 = INT8
 
     out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
     out.write(reinterpret_cast<const char*>(&version), sizeof(version));
@@ -253,17 +256,33 @@ bool GPT::save_binary(const std::string& filepath, const std::vector<char>& id_t
     out.write(reinterpret_cast<const char*>(&embedding_dim), sizeof(embedding_dim));
     out.write(reinterpret_cast<const char*>(&num_heads), sizeof(num_heads));
     out.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+    out.write(reinterpret_cast<const char*>(&tok_type), sizeof(tok_type));
+    out.write(reinterpret_cast<const char*>(&quant_level), sizeof(quant_level));
 
-    // Write vocab
-    assert(id_to_char.size() == vocab_size_);
-    out.write(id_to_char.data(), vocab_size * sizeof(char));
-
-    // Pad to 4-byte boundary for float alignment
-    size_t vocab_bytes = vocab_size * sizeof(char);
-    size_t padding = (4 - (vocab_bytes % 4)) % 4;
-    if (padding > 0) {
-        char pad[3] = {0, 0, 0};
-        out.write(pad, padding);
+    // Serialize Vocabulary
+    if (tok_type == 0) {
+        // CHAR type tokenizer: save as a flat sequence of characters
+        const std::vector<char>& id_to_char = tokenizer.get_id_to_char();
+        assert(id_to_char.size() == vocab_size_);
+        out.write(id_to_char.data(), vocab_size * sizeof(char));
+        
+        // Pad to 4-byte boundary
+        size_t vocab_bytes = vocab_size * sizeof(char);
+        size_t padding = (4 - (vocab_bytes % 4)) % 4;
+        if (padding > 0) {
+            char pad[3] = {0, 0, 0};
+            out.write(pad, padding);
+        }
+    } else {
+        // BPE type tokenizer:
+        // We write the number of merges, followed by the merges themselves as pair of ints: (left, right).
+        const std::vector<std::pair<int, int>>& merges = tokenizer.get_merges();
+        int num_merges = static_cast<int>(merges.size());
+        out.write(reinterpret_cast<const char*>(&num_merges), sizeof(num_merges));
+        for (const auto& merge : merges) {
+            out.write(reinterpret_cast<const char*>(&merge.first), sizeof(merge.first));
+            out.write(reinterpret_cast<const char*>(&merge.second), sizeof(merge.second));
+        }
     }
 
     // Cast away constness to call get_parameters()
@@ -271,9 +290,61 @@ bool GPT::save_binary(const std::string& filepath, const std::vector<char>& id_t
     std::vector<NastyTensors*> params = non_const_this->get_parameters();
 
     for (auto* param : params) {
-        // Move GPU parameters to CPU if necessary
         param->to_cpu(DATA_);
-        out.write(reinterpret_cast<const char*>(param->data()), param->size() * sizeof(float));
+        const float* p_data = param->data();
+        size_t num_elements = param->size();
+
+        if (quant_level == 0) {
+            // FP32: Standard 32-bit floats
+            out.write(reinterpret_cast<const char*>(p_data), num_elements * sizeof(float));
+        } else if (quant_level == 1) {
+            // BF16: Write top 16 bits of 32-bit floats
+            std::vector<uint16_t> bf16_data(num_elements);
+            for (size_t i = 0; i < num_elements; ++i) {
+                uint32_t bits;
+                std::memcpy(&bits, &p_data[i], sizeof(float));
+                bf16_data[i] = static_cast<uint16_t>(bits >> 16);
+            }
+            out.write(reinterpret_cast<const char*>(bf16_data.data()), num_elements * sizeof(uint16_t));
+            
+            // Align to 4-byte boundary if needed
+            if ((num_elements * sizeof(uint16_t)) % 4 != 0) {
+                uint16_t pad = 0;
+                out.write(reinterpret_cast<const char*>(&pad), sizeof(uint16_t));
+            }
+        } else if (quant_level == 2) {
+            // INT8 Quantization: Symmetric tensor/channel scale
+            float max_val = 0.0f;
+            for (size_t i = 0; i < num_elements; ++i) {
+                float abs_v = std::abs(p_data[i]);
+                if (abs_v > max_val) max_val = abs_v;
+            }
+            
+            float scale = max_val / 127.0f;
+            if (scale == 0.0f) scale = 1.0f;
+            
+            // Write scale (4 bytes float)
+            out.write(reinterpret_cast<const char*>(&scale), sizeof(scale));
+            
+            // Quantize and write bytes
+            std::vector<int8_t> q_data(num_elements);
+            for (size_t i = 0; i < num_elements; ++i) {
+                float val = p_data[i] / scale;
+                int q = static_cast<int>(std::round(val));
+                if (q > 127) q = 127;
+                if (q < -127) q = -127;
+                q_data[i] = static_cast<int8_t>(q);
+            }
+            out.write(reinterpret_cast<const char*>(q_data.data()), num_elements * sizeof(int8_t));
+            
+            // Align to 4-byte boundary
+            size_t bytes_written = sizeof(scale) + num_elements * sizeof(int8_t);
+            size_t padding = (4 - (bytes_written % 4)) % 4;
+            if (padding > 0) {
+                char pad[3] = {0, 0, 0};
+                out.write(pad, padding);
+            }
+        }
     }
 
     std::cout << "[+] Saved model binary to " << filepath << "\n";
