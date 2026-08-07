@@ -1,4 +1,5 @@
 #include "NastyTensors.hpp"
+#include "CudaKernels.hpp"
 #include <iostream>
 #include <iomanip>
 #include <cassert>
@@ -149,6 +150,11 @@ NastyTensors NastyTensors::matmul(const NastyTensors &other) const
 }
 
 void NastyTensors::gelu() {
+    if (d_data_ != nullptr) {
+        launch_gelu_forward(device_data(), size());
+        return;
+    }
+
     float* ptr = data();
     size_t n = size();
     if (!ptr) return;
@@ -156,7 +162,6 @@ void NastyTensors::gelu() {
         float x = ptr[i];
         ptr[i] = 0.5f * x * (1.0f + std::tanh(0.79788456f * (x + 0.044715f * x * x * x)));
     }
-
 }
 
 NastyTensors NastyTensors::reshape(const std::vector<size_t>& new_shape) const {

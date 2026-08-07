@@ -137,3 +137,35 @@ void launch_layernorm_backward(const float* dY, const float* x_hat, const float*
 
     layernorm_backward<<<blocksPerGrid, threadsPerBlock>>>(dY, x_hat, var, gamma, dgamma, dbeta, dX, B, T, C, eps);
 }
+
+__global__ void gelu_forward_kernel(float* X, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float x = X[idx];
+        X[idx] = 0.5f * x * (1.0f + tanhf(0.79788456f * (x + 0.044715f * x * x * x)));
+    }
+}
+
+__global__ void gelu_backward_kernel(const float* h1, const float* dh2, float* dh1, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float x = h1[idx];
+        float x3 = x * x * x;
+        float a = 0.79788456f * (x + 0.044715f * x3);
+        float t = tanhf(a);
+        float dgelu = 0.5f * (1.0f + t) + 0.5f * x * (1.0f - t * t) * 0.79788456f * (1.0f + 0.134145f * x * x);
+        dh1[idx] = dh2[idx] * dgelu;
+    }
+}
+
+void launch_gelu_forward(float* X, int N) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    gelu_forward_kernel<<<blocksPerGrid, threadsPerBlock>>>(X, N);
+}
+
+void launch_gelu_backward(const float* h1, const float* dh2, float* dh1, int N) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    gelu_backward_kernel<<<blocksPerGrid, threadsPerBlock>>>(h1, dh2, dh1, N);
+}
