@@ -35,4 +35,4 @@ add_executable(engine ${SOURCES}
 
 find_package(OpenMP REQUIRED)
 find_package(CUDAToolkit REQUIRED)
-target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX CUDA::cudart)
+target_link_libraries(engine PRIVATE OpenMP::OpenMP_CXX CUDA::cudart CUDA::cublas)

@@ -5,8 +5,17 @@
 #include <cassert>
 #include <cmath>
 #include <immintrin.h>
+#include <cublas_v2.h>
 
 #include <cuda_runtime.h>
+
+static cublasHandle_t get_cublas_handle() {
+    static cublasHandle_t handle = nullptr;
+    if (handle == nullptr) {
+        cublasCreate(&handle);
+    }
+    return handle;
+}
 
 std::vector<size_t> NastyTensors::calculate_strides(const std::vector<size_t>& shape) {
     if (shape.empty()) return {};
@@ -120,6 +129,21 @@ NastyTensors NastyTensors::matmul(const NastyTensors &other) const
 
     NastyTensors output({M, N}, 0.0f);
 
+    if (d_data_ != nullptr) {
+        output.to_gpu(DATA_);
+        cublasHandle_t handle = get_cublas_handle();
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 
+                    N, M, K, 
+                    &alpha, 
+                    other.device_data(), N, 
+                    this->device_data(), K, 
+                    &beta, 
+                    output.device_data(), N);
+        return output;
+    }
+
     const float* a = this->data();
     const float* b = other.data();
     float* c = output.data();
@@ -213,6 +237,21 @@ NastyTensors NastyTensors::matmul_transposed_b(const NastyTensors& other) const 
     size_t N = other.shape()[0];
 
     NastyTensors output({M, N}, 0.0f);
+
+    if (d_data_ != nullptr) {
+        output.to_gpu(DATA_);
+        cublasHandle_t handle = get_cublas_handle();
+        float alpha = 1.0f;
+        float beta = 0.0f;
+        cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, 
+                    N, M, K, 
+                    &alpha, 
+                    other.device_data(), K, 
+                    this->device_data(), K, 
+                    &beta, 
+                    output.device_data(), N);
+        return output;
+    }
 
     const float* a = this->data();
     const float* b = other.data();
