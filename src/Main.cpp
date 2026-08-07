@@ -44,6 +44,11 @@ int main() {
     std::vector<NastyTensors*> params = gpt_model.get_parameters();
     std::cout << "Number of learnable parameters: " << params.size() << "\n";
 
+    // Move all model parameters to the GPU
+    for (auto* param : params) {
+        param->to_gpu(DATA_);
+    }
+
     AdamW optimizer(params, 1e-3f, 0.9f, 0.99f, 1e-8f, 0.01f);
 
     std::vector<int> X_train, Y_train;

@@ -195,6 +195,7 @@ std::vector<int> GPT::generate(const std::vector<int>& prompt, size_t max_new_to
         std::vector<int> input(generated.begin() + start_idx, generated.end());
         
         NastyTensors logits = forward(input, 1, len);
+        logits.to_cpu(DATA_);
         
         float* logits_ptr = logits.data();
         size_t last_row_offset = (len - 1) * vocab_size_;
