@@ -64,7 +64,7 @@ int main() {
     std::cout << "[*] Training starting...\n";
     auto train_start = chrono::high_resolution_clock::now();
     
-    int total_steps = 3000;
+    int total_steps = 10000;
     for (int step = 0; step < total_steps; ++step) {
         auto step_start = chrono::high_resolution_clock::now();
         
@@ -105,7 +105,7 @@ int main() {
     std::cout << tokenizer.decode(gen_tokens) << "\n";
     std::cout << "-------------------------------------\n";
     
-    gpt_model.save_binary("dataset/macbeth.bin", tokenizer.get_id_to_char());
+    gpt_model.save_binary("dataset/macbeth2.bin", tokenizer.get_id_to_char());
     
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<double> elapsed = end - start;
