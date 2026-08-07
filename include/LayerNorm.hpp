@@ -10,8 +10,8 @@ private:
     NastyTensors beta_;
 
     mutable NastyTensors x_hat_;
-    mutable std::vector<float> mean_;
-    mutable std::vector<float> var_;
+    mutable NastyTensors mean_;
+    mutable NastyTensors var_;
 
 public:
     LayerNorm(size_t embedding_dim, float epsilon = 1e-5f);

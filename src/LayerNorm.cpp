@@ -1,6 +1,9 @@
 #include "LayerNorm.hpp"
+#include "CudaKernels.hpp"
+
 #include <cmath>
 #include <cassert>
+#include <cuda_runtime.h>
 
 LayerNorm::LayerNorm(size_t embedding_dim, float epsilon)
     : embedding_dim_(embedding_dim), epsilon_(epsilon),
@@ -17,9 +20,31 @@ void LayerNorm::forward(NastyTensors& X) const {
     size_t T = X.shape()[1];
     size_t C = X.shape()[2];
 
+    if (gamma_.device_data() != nullptr) {
+        x_hat_ = NastyTensors({B, T, C});
+        mean_ = NastyTensors({B, T});
+        var_ = NastyTensors({B, T});
+
+        x_hat_.to_gpu(DATA_);
+        mean_.to_gpu(DATA_);
+        var_.to_gpu(DATA_);
+        X.to_gpu(DATA_);
+
+        launch_layernorm_forward(
+            X.device_data(), 
+            gamma_.device_data(), 
+            beta_.device_data(), 
+            x_hat_.device_data(), 
+            mean_.device_data(), 
+            var_.device_data(), 
+            B, T, C, epsilon_
+        );
+        return;
+    }
+
     x_hat_ = NastyTensors({B, T, C});
-    mean_.resize(B * T);
-    var_.resize(B * T);
+    mean_ = NastyTensors({B, T});
+    var_ = NastyTensors({B, T});
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t t = 0; t < T; ++t) {
@@ -37,8 +62,8 @@ void LayerNorm::forward(NastyTensors& X) const {
             float variance = sum_sq_diff / C;
 
             float scale = 1.0f / std::sqrt(variance + epsilon_);
-            mean_[b * T + t] = mean;
-            var_[b * T + t] = variance;
+            mean_(b, t) = mean;
+            var_(b, t) = variance;
 
             for (size_t c = 0; c < C; ++c) {
                 float xh = (X(b, t, c) - mean) * scale;
@@ -56,12 +81,30 @@ void LayerNorm::backward(const NastyTensors& dY, NastyTensors& dX) {
     size_t C = dY.shape()[2];
     assert(C == embedding_dim_);
 
+    if (gamma_.device_data() != nullptr) {
+        dX.to_gpu(DATA_);
+        gamma_.to_gpu(GRAD_);
+        beta_.to_gpu(GRAD_);
+
+        launch_layernorm_backward(
+            dY.device_data(),
+            x_hat_.device_data(),
+            var_.device_data(),
+            gamma_.device_data(),
+            gamma_.device_grad(),
+            beta_.device_grad(),
+            dX.device_data(),
+            B, T, C, epsilon_
+        );
+        return;
+    }
+
     float* dgamma = gamma_.grad();
     float* dbeta = beta_.grad();
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t t = 0; t < T; ++t) {
-            float variance = var_[b * T + t];
+            float variance = var_(b, t);
             float scale = 1.0f / std::sqrt(variance + epsilon_);
 
             float sum_dy_gamma = 0.0f;
