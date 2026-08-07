@@ -21,8 +21,8 @@
 #include "GPTInference.hpp"
 
 // --- Hardware Pins Configuration ---
-#define OLED_SDA 8
-#define OLED_SCL 9
+#define OLED_SDA 17
+#define OLED_SCL 18
 
 // --- Display Constructor Choice ---
 // For 1.3" OLEDs, SH1106 is the most common driver.

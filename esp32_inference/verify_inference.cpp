@@ -40,9 +40,7 @@ int main() {
     for (int t : tokens) std::cout << t << " ";
     std::cout << "\n\n--- Generating ---\n";
     
-    std::cout << prompt;
-    std::cout.flush();
-    
+    std::string generated_text = prompt;
     std::vector<float> logits(model.config.vocab_size);
     for (int i = 0; i < 150; ++i) {
         model.forward(tokens.data(), tokens.size(), logits.data());
@@ -70,15 +68,17 @@ int main() {
             }
         }
         
-        std::cout << model.id_to_char[next_token];
-        std::cout.flush();
+        generated_text += model.id_to_char[next_token];
         
         tokens.push_back(next_token);
         if (tokens.size() > (size_t)model.config.max_seq_len) {
             tokens.erase(tokens.begin());
         }
     }
+    
     std::cout << "\n------------------\n";
+    std::cout << "Final Generated Text:\n" << generated_text << "\n";
+    std::cout << "------------------\n";
     
     return 0;
 }
