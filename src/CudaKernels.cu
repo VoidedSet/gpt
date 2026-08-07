@@ -323,3 +323,43 @@ void launch_attention_backward(const float* dO, const float* qkv, const float* a
     int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
     attention_backward_kernel<<<blocksPerGrid, threadsPerBlock>>>(dO, qkv, att_probs, dqkv, B, T, C, num_heads, head_dim, scale);
 }
+
+__global__ void add_tensors_kernel(float* dest, const float* src, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        dest[idx] += src[idx];
+    }
+}
+
+void launch_add_tensors(float* dest, const float* src, int N) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    add_tensors_kernel<<<blocksPerGrid, threadsPerBlock>>>(dest, src, N);
+}
+
+__global__ void adamw_step_kernel(float* w, const float* g, float* m, float* v,
+                                  size_t N, float lr, float beta1, float beta2,
+                                  float eps, float weight_decay,
+                                  float bias_correction1, float bias_correction2) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float grad = g[idx];
+        
+        m[idx] = beta1 * m[idx] + (1.0f - beta1) * grad;
+        v[idx] = beta2 * v[idx] + (1.0f - beta2) * grad * grad;
+        
+        float m_hat = m[idx] / bias_correction1;
+        float v_hat = v[idx] / bias_correction2;
+        
+        w[idx] -= lr * (m_hat / (sqrtf(v_hat) + eps) + weight_decay * w[idx]);
+    }
+}
+
+void launch_adamw_step(float* w, const float* g, float* m, float* v,
+                       size_t N, float lr, float beta1, float beta2,
+                       float eps, float weight_decay,
+                       float bias_correction1, float bias_correction2) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    adamw_step_kernel<<<blocksPerGrid, threadsPerBlock>>>(w, g, m, v, N, lr, beta1, beta2, eps, weight_decay, bias_correction1, bias_correction2);
+}

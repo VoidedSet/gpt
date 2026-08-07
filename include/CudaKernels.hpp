@@ -27,3 +27,10 @@ void launch_attention_forward(const float* qkv, float* att_probs, float* O,
 
 void launch_attention_backward(const float* dO, const float* qkv, const float* att_probs, float* dqkv,
                                int B, int T, int C, int num_heads, int head_dim, float scale);
+
+void launch_add_tensors(float* dest, const float* src, int N);
+
+void launch_adamw_step(float* w, const float* g, float* m, float* v,
+                       size_t N, float lr, float beta1, float beta2,
+                       float eps, float weight_decay,
+                       float bias_correction1, float bias_correction2);
