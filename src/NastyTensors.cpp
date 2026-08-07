@@ -70,6 +70,16 @@ NastyTensors NastyTensors::clone() const {
             }
         }
     }
+
+    if (this->d_data_ != nullptr) {
+        cloned.to_gpu(DATA_);
+        cudaMemcpy(cloned.device_data(), this->device_data(), num_elements * sizeof(float), cudaMemcpyDeviceToDevice);
+    }
+    if (this->d_grad_ != nullptr) {
+        cloned.to_gpu(GRAD_);
+        cudaMemcpy(cloned.device_grad(), this->device_grad(), num_elements * sizeof(float), cudaMemcpyDeviceToDevice);
+    }
+
     return cloned;
 }
 
