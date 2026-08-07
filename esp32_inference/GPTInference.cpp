@@ -13,6 +13,8 @@ GPTInference::GPTInference() {}
 GPTInference::~GPTInference() {
     if (blocks) delete[] blocks;
     if (id_to_char) free(id_to_char);
+    if (merge_left) free(merge_left);
+    if (merge_right) free(merge_right);
 
 #ifdef ESP_PLATFORM
     if (weights_buffer) heap_caps_free(weights_buffer);
@@ -28,6 +30,51 @@ GPTInference::~GPTInference() {
     if (mlp_h) free(mlp_h);
 }
 
+// Helper to determine the parameter sizes (number of elements)
+static size_t get_param_size_bytes(size_t num_elements, int quant_level) {
+    if (quant_level == 0) {
+        return num_elements * sizeof(float);
+    } else if (quant_level == 1) {
+        size_t bytes = num_elements * sizeof(uint16_t);
+        if (bytes % 4 != 0) bytes += 2; // Add alignment padding
+        return bytes;
+    } else { // quant_level == 2 (INT8)
+        size_t bytes = sizeof(float) + num_elements * sizeof(int8_t);
+        size_t padding = (4 - (bytes % 4)) % 4;
+        return bytes + padding;
+    }
+}
+
+// Helper to assign pointers and parse parameter layouts
+static QuantizedTensor assign_param(uint8_t*& current_ptr, size_t num_elements, int quant_level) {
+    QuantizedTensor tensor;
+    if (quant_level == 0) {
+        tensor.scale = 1.0f;
+        tensor.data = (void*)current_ptr;
+        current_ptr += num_elements * sizeof(float);
+    } else if (quant_level == 1) {
+        tensor.scale = 1.0f;
+        tensor.data = (void*)current_ptr;
+        current_ptr += num_elements * sizeof(uint16_t);
+        if ((num_elements * sizeof(uint16_t)) % 4 != 0) {
+            current_ptr += 2; // skip padding
+        }
+    } else { // quant_level == 2 (INT8)
+        // Read scale factor (4 bytes float)
+        tensor.scale = *(float*)current_ptr;
+        current_ptr += sizeof(float);
+        
+        tensor.data = (void*)current_ptr;
+        current_ptr += num_elements * sizeof(int8_t);
+        
+        // Align to 4-byte boundary
+        size_t bytes_written = sizeof(float) + num_elements * sizeof(int8_t);
+        size_t padding = (4 - (bytes_written % 4)) % 4;
+        current_ptr += padding;
+    }
+    return tensor;
+}
+
 bool GPTInference::load_model(const char* filepath) {
     FILE* f = fopen(filepath, "rb");
     if (!f) {
@@ -35,21 +82,48 @@ bool GPTInference::load_model(const char* filepath) {
         return false;
     }
 
-    // Read header
-    if (fread(&config, sizeof(GPTConfig), 1, f) != 1) {
-        printf("[-] Error: Failed to read model header.\n");
+    // Read header up to original size
+    // Note: We need to parse magic and version first to handle layout correctly
+    int magic = 0;
+    int version = 0;
+    if (fread(&magic, sizeof(int), 1, f) != 1 || fread(&version, sizeof(int), 1, f) != 1) {
+        printf("[-] Error: Failed to read model metadata.\n");
         fclose(f);
         return false;
     }
 
-    // Verify magic and version
-    if (config.magic != 0x47505432) {
-        printf("[-] Error: Invalid magic number (0x%X). Expected 0x47505432.\n", config.magic);
+    if (magic != 0x47505432) {
+        printf("[-] Error: Invalid magic number (0x%X). Expected 0x47505432.\n", magic);
         fclose(f);
         return false;
     }
-    if (config.version != 1) {
-        printf("[-] Error: Unsupported model version (%d).\n", config.version);
+
+    config.magic = magic;
+    config.version = version;
+
+    // Read metadata values depending on version
+    if (fread(&config.vocab_size, sizeof(int), 1, f) != 1 ||
+        fread(&config.max_seq_len, sizeof(int), 1, f) != 1 ||
+        fread(&config.embedding_dim, sizeof(int), 1, f) != 1 ||
+        fread(&config.num_heads, sizeof(int), 1, f) != 1 ||
+        fread(&config.num_layers, sizeof(int), 1, f) != 1) {
+        printf("[-] Error: Failed to read model dimensions.\n");
+        fclose(f);
+        return false;
+    }
+
+    if (version == 1) {
+        config.tokenizer_type = 0;     // Default CHAR
+        config.quantization_level = 0; // Default FP32
+    } else if (version == 2) {
+        if (fread(&config.tokenizer_type, sizeof(int), 1, f) != 1 ||
+            fread(&config.quantization_level, sizeof(int), 1, f) != 1) {
+            printf("[-] Error: Failed to read version 2 metadata flags.\n");
+            fclose(f);
+            return false;
+        }
+    } else {
+        printf("[-] Error: Unsupported model version (%d).\n", version);
         fclose(f);
         return false;
     }
@@ -60,25 +134,66 @@ bool GPTInference::load_model(const char* filepath) {
     printf("    embedding_dim: %d\n", config.embedding_dim);
     printf("    num_heads: %d\n", config.num_heads);
     printf("    num_layers: %d\n", config.num_layers);
+    printf("    tokenizer_type: %s\n", config.tokenizer_type == 0 ? "CHAR" : "BPE");
+    printf("    quantization_level: %d (%s)\n", config.quantization_level,
+           config.quantization_level == 0 ? "FP32" : (config.quantization_level == 1 ? "BF16" : "INT8"));
 
-    // Read vocabulary mapping
-    id_to_char = (char*)malloc(config.vocab_size * sizeof(char));
-    if (fread(id_to_char, sizeof(char), config.vocab_size, f) != (size_t)config.vocab_size) {
-        printf("[-] Error: Failed to read vocabulary mapping.\n");
-        fclose(f);
-        return false;
-    }
-
-    // Read padding bytes to align to 4-byte boundaries
-    size_t vocab_bytes = config.vocab_size * sizeof(char);
-    size_t padding = (4 - (vocab_bytes % 4)) % 4;
-    if (padding > 0) {
-        char pad[3];
-        if (fread(pad, sizeof(char), padding, f) != padding) {
-            printf("[-] Error: Failed to read padding bytes.\n");
+    // Read Vocabulary
+    if (config.tokenizer_type == 0) {
+        id_to_char = (char*)malloc(config.vocab_size * sizeof(char));
+        if (fread(id_to_char, sizeof(char), config.vocab_size, f) != (size_t)config.vocab_size) {
+            printf("[-] Error: Failed to read character vocabulary mapping.\n");
             fclose(f);
             return false;
         }
+        
+        // Read padding bytes to align to 4-byte boundaries
+        size_t vocab_bytes = config.vocab_size * sizeof(char);
+        size_t padding = (4 - (vocab_bytes % 4)) % 4;
+        if (padding > 0) {
+            char pad[3];
+            if (fread(pad, sizeof(char), padding, f) != padding) {
+                printf("[-] Error: Failed to read padding bytes.\n");
+                fclose(f);
+                return false;
+            }
+        }
+    } else {
+        // Load BPE vocabulary merges
+        if (fread(&num_merges, sizeof(int), 1, f) != 1) {
+            printf("[-] Error: Failed to read number of BPE merges.\n");
+            fclose(f);
+            return false;
+        }
+        
+        merge_left = (int*)malloc(num_merges * sizeof(int));
+        merge_right = (int*)malloc(num_merges * sizeof(int));
+        for (int i = 0; i < num_merges; ++i) {
+            if (fread(&merge_left[i], sizeof(int), 1, f) != 1 ||
+                fread(&merge_right[i], sizeof(int), 1, f) != 1) {
+                printf("[-] Error: Failed to read BPE merges rule at index %d.\n", i);
+                fclose(f);
+                return false;
+            }
+        }
+        
+        // Reconstruct BPE vocab mappings from merges
+        bpe_vocab.resize(256);
+        for (int i = 0; i < 256; ++i) {
+            bpe_vocab[i] = std::string(1, (char)i);
+        }
+        for (int i = 0; i < num_merges; ++i) {
+            int left = merge_left[i];
+            int right = merge_right[i];
+            if (left < 0 || left >= (int)bpe_vocab.size() || right < 0 || right >= (int)bpe_vocab.size()) {
+                printf("[-] Error: BPE merge out of bounds: %d, %d at index %d\n", left, right, i);
+                fclose(f);
+                return false;
+            }
+            std::string merged_str = bpe_vocab[left] + bpe_vocab[right];
+            bpe_vocab.push_back(merged_str);
+        }
+        printf("[+] BPE vocabulary expanded successfully to %zu tokens.\n", bpe_vocab.size());
     }
 
     // Calculate parameter sizes
@@ -86,31 +201,37 @@ bool GPTInference::load_model(const char* filepath) {
     size_t max_seq_len = config.max_seq_len;
     size_t embedding_dim = config.embedding_dim;
     size_t num_layers = config.num_layers;
+    int quant = config.quantization_level;
 
-    size_t num_floats = 0;
-    num_floats += vocab_size * embedding_dim; // wte
-    num_floats += max_seq_len * embedding_dim; // wpe
+    std::vector<size_t> param_sizes;
+    param_sizes.push_back(vocab_size * embedding_dim); // wte
+    param_sizes.push_back(max_seq_len * embedding_dim); // wpe
 
     for (size_t i = 0; i < num_layers; ++i) {
-        num_floats += embedding_dim; // ln1_gamma
-        num_floats += embedding_dim; // ln1_beta
-        num_floats += embedding_dim * 3 * embedding_dim; // w_qkv
-        num_floats += 3 * embedding_dim; // b_qkv
-        num_floats += embedding_dim * embedding_dim; // w_proj
-        num_floats += embedding_dim; // b_proj
-        num_floats += embedding_dim; // ln2_gamma
-        num_floats += embedding_dim; // ln2_beta
-        num_floats += embedding_dim * 4 * embedding_dim; // w_fc
-        num_floats += 4 * embedding_dim; // b_fc
-        num_floats += 4 * embedding_dim * embedding_dim; // w_proj_mlp
-        num_floats += embedding_dim; // b_proj_mlp
+        param_sizes.push_back(embedding_dim); // ln1_gamma
+        param_sizes.push_back(embedding_dim); // ln1_beta
+        param_sizes.push_back(embedding_dim * 3 * embedding_dim); // w_qkv
+        param_sizes.push_back(3 * embedding_dim); // b_qkv
+        param_sizes.push_back(embedding_dim * embedding_dim); // w_proj
+        param_sizes.push_back(embedding_dim); // b_proj
+        param_sizes.push_back(embedding_dim); // ln2_gamma
+        param_sizes.push_back(embedding_dim); // ln2_beta
+        param_sizes.push_back(embedding_dim * 4 * embedding_dim); // w_fc
+        param_sizes.push_back(4 * embedding_dim); // b_fc
+        param_sizes.push_back(4 * embedding_dim * embedding_dim); // w_proj_mlp
+        param_sizes.push_back(embedding_dim); // b_proj_mlp
     }
 
-    num_floats += embedding_dim; // ln_f_gamma
-    num_floats += embedding_dim; // ln_f_beta
+    param_sizes.push_back(embedding_dim); // ln_f_gamma
+    param_sizes.push_back(embedding_dim); // ln_f_beta
 
-    weights_size_bytes = num_floats * sizeof(float);
-    printf("[+] Model weight floats: %zu (~%.2f MB)\n", num_floats, (double)weights_size_bytes / (1024.0 * 1024.0));
+    size_t total_bytes = 0;
+    for (size_t size : param_sizes) {
+        total_bytes += get_param_size_bytes(size, quant);
+    }
+    weights_size_bytes = total_bytes;
+    printf("[+] Allocated weights binary size: %zu bytes (~%.2f MB)\n", 
+           weights_size_bytes, (double)weights_size_bytes / (1024.0 * 1024.0));
 
     // Allocate memory for weights (prefer PSRAM if on ESP32)
 #ifdef ESP_PLATFORM
@@ -128,7 +249,7 @@ bool GPTInference::load_model(const char* filepath) {
     }
 
     // Read weights from file
-    if (fread(weights_buffer, sizeof(float), num_floats, f) != num_floats) {
+    if (fread(weights_buffer, 1, weights_size_bytes, f) != weights_size_bytes) {
         printf("[-] Error: Failed to read model weights.\n");
         fclose(f);
         return false;
@@ -137,41 +258,41 @@ bool GPTInference::load_model(const char* filepath) {
     printf("[+] Model weights loaded successfully.\n");
 
     // Assign weight pointers
-    float* ptr = (float*)weights_buffer;
-    wte = ptr; ptr += vocab_size * embedding_dim;
-    wpe = ptr; ptr += max_seq_len * embedding_dim;
+    uint8_t* current_ptr = (uint8_t*)weights_buffer;
+    wte = assign_param(current_ptr, vocab_size * embedding_dim, quant);
+    wpe = assign_param(current_ptr, max_seq_len * embedding_dim, quant);
 
     blocks = new BlockWeights[num_layers];
     for (size_t i = 0; i < num_layers; ++i) {
-        blocks[i].ln1_gamma = ptr; ptr += embedding_dim;
-        blocks[i].ln1_beta = ptr; ptr += embedding_dim;
-        blocks[i].w_qkv = ptr; ptr += embedding_dim * 3 * embedding_dim;
-        blocks[i].b_qkv = ptr; ptr += 3 * embedding_dim;
-        blocks[i].w_proj = ptr; ptr += embedding_dim * embedding_dim;
-        blocks[i].b_proj = ptr; ptr += embedding_dim;
-        blocks[i].ln2_gamma = ptr; ptr += embedding_dim;
-        blocks[i].ln2_beta = ptr; ptr += embedding_dim;
-        blocks[i].w_fc = ptr; ptr += embedding_dim * 4 * embedding_dim;
-        blocks[i].b_fc = ptr; ptr += 4 * embedding_dim;
-        blocks[i].w_proj_mlp = ptr; ptr += 4 * embedding_dim * embedding_dim;
-        blocks[i].b_proj_mlp = ptr; ptr += embedding_dim;
+        blocks[i].ln1_gamma = assign_param(current_ptr, embedding_dim, quant);
+        blocks[i].ln1_beta = assign_param(current_ptr, embedding_dim, quant);
+        blocks[i].w_qkv = assign_param(current_ptr, embedding_dim * 3 * embedding_dim, quant);
+        blocks[i].b_qkv = assign_param(current_ptr, 3 * embedding_dim, quant);
+        blocks[i].w_proj = assign_param(current_ptr, embedding_dim * embedding_dim, quant);
+        blocks[i].b_proj = assign_param(current_ptr, embedding_dim, quant);
+        blocks[i].ln2_gamma = assign_param(current_ptr, embedding_dim, quant);
+        blocks[i].ln2_beta = assign_param(current_ptr, embedding_dim, quant);
+        blocks[i].w_fc = assign_param(current_ptr, embedding_dim * 4 * embedding_dim, quant);
+        blocks[i].b_fc = assign_param(current_ptr, 4 * embedding_dim, quant);
+        blocks[i].w_proj_mlp = assign_param(current_ptr, 4 * embedding_dim * embedding_dim, quant);
+        blocks[i].b_proj_mlp = assign_param(current_ptr, embedding_dim, quant);
     }
-    ln_f_gamma = ptr; ptr += embedding_dim;
-    ln_f_beta = ptr; ptr += embedding_dim;
+    ln_f_gamma = assign_param(current_ptr, embedding_dim, quant);
+    ln_f_beta = assign_param(current_ptr, embedding_dim, quant);
 
-    // Verify pointer arithmetic matches num_floats
-    if (ptr - (float*)weights_buffer != (ptrdiff_t)num_floats) {
-        printf("[-] Error: Weight pointer offset mismatch! Offset diff: %td, expected: %zu\n", 
-               ptr - (float*)weights_buffer, num_floats);
+    // Verify pointer arithmetic matches total bytes
+    size_t processed_bytes = current_ptr - (uint8_t*)weights_buffer;
+    if (processed_bytes != weights_size_bytes) {
+        printf("[-] Error: Weight pointer offset mismatch! Offset diff: %zu, expected: %zu\n", 
+               processed_bytes, weights_size_bytes);
         return false;
     }
 
     // Allocate memory for activations (Internal fast SRAM)
-    // We optimize memory by reusing buffers
     x_buffer = (float*)malloc(max_seq_len * embedding_dim * sizeof(float));
     x2_buffer = (float*)malloc(max_seq_len * embedding_dim * sizeof(float));
-    qkv_buffer = (float*)malloc(max_seq_len * 4 * embedding_dim * sizeof(float)); // Shared scratch buffer for qkv and mlp_h
-    att_scores = (float*)malloc(max_seq_len * max_seq_len * sizeof(float));        // Causal attention matrix for a single head
+    qkv_buffer = (float*)malloc(max_seq_len * 4 * embedding_dim * sizeof(float)); // Shared MLP/QKV buffer
+    att_scores = (float*)malloc(max_seq_len * max_seq_len * sizeof(float));
     
     if (!x_buffer || !x2_buffer || !qkv_buffer || !att_scores) {
         printf("[-] Error: Failed to allocate activation buffers in internal memory.\n");
@@ -184,7 +305,6 @@ bool GPTInference::load_model(const char* filepath) {
 
 void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
     if (T > config.max_seq_len) {
-        printf("[-] Warning: sequence length %d exceeds max %d. Truncating.\n", T, config.max_seq_len);
         T = config.max_seq_len;
     }
 
@@ -192,16 +312,36 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
     int V = config.vocab_size;
     int num_heads = config.num_heads;
     int head_dim = C / num_heads;
-    float scale = 1.0f / sqrtf((float)head_dim);
+    float head_scale = 1.0f / sqrtf((float)head_dim);
+    int quant = config.quantization_level;
 
     // 1. Embedding lookup: x = wte[token] + wpe[pos]
     for (int t = 0; t < T; ++t) {
         int token = input_tokens[t];
-        const float* wte_row = wte + token * C;
-        const float* wpe_row = wpe + t * C;
         float* x_row = x_buffer + t * C;
-        for (int c = 0; c < C; ++c) {
-            x_row[c] = wte_row[c] + wpe_row[c];
+        
+        // Lookup WTE
+        if (quant == 0) {
+            const float* wte_data = (const float*)wte.data;
+            for (int c = 0; c < C; ++c) x_row[c] = wte_data[token * C + c];
+        } else if (quant == 1) {
+            const uint16_t* wte_data = (const uint16_t*)wte.data;
+            for (int c = 0; c < C; ++c) x_row[c] = dequantize_bf16(wte_data[token * C + c]);
+        } else {
+            const int8_t* wte_data = (const int8_t*)wte.data;
+            for (int c = 0; c < C; ++c) x_row[c] = wte_data[token * C + c] * wte.scale;
+        }
+
+        // Lookup WPE
+        if (quant == 0) {
+            const float* wpe_data = (const float*)wpe.data;
+            for (int c = 0; c < C; ++c) x_row[c] += wpe_data[t * C + c];
+        } else if (quant == 1) {
+            const uint16_t* wpe_data = (const uint16_t*)wpe.data;
+            for (int c = 0; c < C; ++c) x_row[c] += dequantize_bf16(wpe_data[t * C + c]);
+        } else {
+            const int8_t* wpe_data = (const int8_t*)wpe.data;
+            for (int c = 0; c < C; ++c) x_row[c] += wpe_data[t * C + c] * wpe.scale;
         }
     }
 
@@ -210,24 +350,26 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
         const BlockWeights& block = blocks[l];
 
         // LayerNorm 1
-        layernorm(x_buffer, block.ln1_gamma, block.ln1_beta, x2_buffer, T, C);
+        layernorm(x_buffer, block.ln1_gamma, block.ln1_beta, x2_buffer, T, C, quant);
 
         // QKV Projection: x2_buffer (T x C) * w_qkv (C x 3C) + b_qkv (3C) -> qkv_buffer (T x 3C)
-        matmul(x2_buffer, block.w_qkv, qkv_buffer, T, C, 3 * C);
+        matmul(x2_buffer, block.w_qkv, qkv_buffer, T, C, 3 * C, quant);
         for (int t = 0; t < T; ++t) {
             float* qkv_row = qkv_buffer + t * 3 * C;
-            for (int i = 0; i < 3 * C; ++i) {
-                qkv_row[i] += block.b_qkv[i];
+            if (quant == 0) {
+                const float* b_qkv = (const float*)block.b_qkv.data;
+                for (int i = 0; i < 3 * C; ++i) qkv_row[i] += b_qkv[i];
+            } else if (quant == 1) {
+                const uint16_t* b_qkv = (const uint16_t*)block.b_qkv.data;
+                for (int i = 0; i < 3 * C; ++i) qkv_row[i] += dequantize_bf16(b_qkv[i]);
+            } else {
+                const int8_t* b_qkv = (const int8_t*)block.b_qkv.data;
+                for (int i = 0; i < 3 * C; ++i) qkv_row[i] += b_qkv[i] * block.b_qkv.scale;
             }
         }
 
         // Multi-head attention
-        // qkv_buffer is layout: [T, 3, num_heads, head_dim]
-        // Q: qkv_buffer[t, 0, h, d] -> qkv_buffer + t*3C + 0*C + h*head_dim + d
-        // K: qkv_buffer[t, 1, h, d] -> qkv_buffer + t*3C + 1*C + h*head_dim + d
-        // V: qkv_buffer[t, 2, h, d] -> qkv_buffer + t*3C + 2*C + h*head_dim + d
         for (int h = 0; h < num_heads; ++h) {
-            // Compute causal attention matrix [T, T] for this head
             for (int q_t = 0; q_t < T; ++q_t) {
                 const float* Q = qkv_buffer + q_t * 3 * C + h * head_dim;
                 for (int k_t = 0; k_t <= q_t; ++k_t) {
@@ -236,13 +378,11 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
                     for (int d = 0; d < head_dim; ++d) {
                         dot += Q[d] * K[d];
                     }
-                    att_scores[q_t * T + k_t] = dot * scale;
+                    att_scores[q_t * T + k_t] = dot * head_scale;
                 }
-                // Softmax on key dimensions 0..q_t
                 softmax(att_scores + q_t * T, q_t + 1);
             }
 
-            // Compute attention output O: x2_buffer (T x C)
             for (int q_t = 0; q_t < T; ++q_t) {
                 float* O = x2_buffer + q_t * C + h * head_dim;
                 for (int d = 0; d < head_dim; ++d) O[d] = 0.0f;
@@ -257,99 +397,172 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
             }
         }
 
-        // Project attention output: x2_buffer (T x C) * w_proj (C x C) + b_proj -> qkv_buffer (first T x C)
-        matmul(x2_buffer, block.w_proj, qkv_buffer, T, C, C);
-        // Add bias and add to residual stream x_buffer
+        // Project attention output: x2_buffer (T x C) * w_proj (C x C) + b_proj -> qkv_buffer (T x C)
+        matmul(x2_buffer, block.w_proj, qkv_buffer, T, C, C, quant);
         for (int t = 0; t < T; ++t) {
             float* x_row = x_buffer + t * C;
             const float* proj_row = qkv_buffer + t * C;
-            for (int c = 0; c < C; ++c) {
-                x_row[c] += proj_row[c] + block.b_proj[c];
+            if (quant == 0) {
+                const float* b_proj = (const float*)block.b_proj.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj[c];
+            } else if (quant == 1) {
+                const uint16_t* b_proj = (const uint16_t*)block.b_proj.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + dequantize_bf16(b_proj[c]);
+            } else {
+                const int8_t* b_proj = (const int8_t*)block.b_proj.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj[c] * block.b_proj.scale;
             }
         }
 
         // LayerNorm 2
-        layernorm(x_buffer, block.ln2_gamma, block.ln2_beta, x2_buffer, T, C);
+        layernorm(x_buffer, block.ln2_gamma, block.ln2_beta, x2_buffer, T, C, quant);
 
         // MLP first linear layer: x2_buffer (T x C) * w_fc (C x 4C) + b_fc -> qkv_buffer (T x 4C)
-        matmul(x2_buffer, block.w_fc, qkv_buffer, T, C, 4 * C);
+        matmul(x2_buffer, block.w_fc, qkv_buffer, T, C, 4 * C, quant);
         for (int t = 0; t < T; ++t) {
             float* fc_row = qkv_buffer + t * 4 * C;
-            for (int i = 0; i < 4 * C; ++i) {
-                fc_row[i] += block.b_fc[i];
+            if (quant == 0) {
+                const float* b_fc = (const float*)block.b_fc.data;
+                for (int i = 0; i < 4 * C; ++i) fc_row[i] += b_fc[i];
+            } else if (quant == 1) {
+                const uint16_t* b_fc = (const uint16_t*)block.b_fc.data;
+                for (int i = 0; i < 4 * C; ++i) fc_row[i] += dequantize_bf16(b_fc[i]);
+            } else {
+                const int8_t* b_fc = (const int8_t*)block.b_fc.data;
+                for (int i = 0; i < 4 * C; ++i) fc_row[i] += b_fc[i] * block.b_fc.scale;
             }
         }
-        // GeLU
         gelu(qkv_buffer, T * 4 * C);
 
         // MLP second linear layer: qkv_buffer (T x 4C) * w_proj_mlp (4C x C) + b_proj_mlp -> x2_buffer (T x C)
-        matmul(qkv_buffer, block.w_proj_mlp, x2_buffer, T, 4 * C, C);
-        // Add bias and add to residual stream x_buffer
+        matmul(qkv_buffer, block.w_proj_mlp, x2_buffer, T, 4 * C, C, quant);
         for (int t = 0; t < T; ++t) {
             float* x_row = x_buffer + t * C;
             const float* proj_row = x2_buffer + t * C;
-            for (int c = 0; c < C; ++c) {
-                x_row[c] += proj_row[c] + block.b_proj_mlp[c];
+            if (quant == 0) {
+                const float* b_proj_mlp = (const float*)block.b_proj_mlp.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj_mlp[c];
+            } else if (quant == 1) {
+                const uint16_t* b_proj_mlp = (const uint16_t*)block.b_proj_mlp.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + dequantize_bf16(b_proj_mlp[c]);
+            } else {
+                const int8_t* b_proj_mlp = (const int8_t*)block.b_proj_mlp.data;
+                for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj_mlp[c] * block.b_proj_mlp.scale;
             }
         }
     }
 
-    // 3. Final LayerNorm (only need for the last token T-1!)
-    float* last_x_ln = x2_buffer; // Shape: [1, C]
-    layernorm(x_buffer + (T - 1) * C, ln_f_gamma, ln_f_beta, last_x_ln, 1, C);
+    // 3. Final LayerNorm for last token
+    float* last_x_ln = x2_buffer;
+    layernorm(x_buffer + (T - 1) * C, ln_f_gamma, ln_f_beta, last_x_ln, 1, C, quant);
 
-    // 4. Classifier Head: logits = last_x_ln (1 x C) * wte^T (C x V)
-    // We compute matmul with wte transposed (wte original shape was V x C).
-    // result: out_logits (1 x V)
-    matmul_transposed_b(last_x_ln, wte, out_logits, 1, C, V);
+    // 4. Classifier Head: logits = last_x_ln * wte^T
+    matmul_transposed_b(last_x_ln, wte, out_logits, 1, C, V, quant);
 }
 
-// Optimized matrix multiplication (i-k-j loop order for cache friendliness)
-void GPTInference::matmul(const float* A, const float* B, float* C, int M, int K, int N) {
+void GPTInference::matmul(const float* A, const QuantizedTensor& B, float* C, int M, int K, int N, int quant_level) {
     memset(C, 0, M * N * sizeof(float));
-    for (int i = 0; i < M; ++i) {
-        for (int k = 0; k < K; ++k) {
-            float val = A[i * K + k];
-            const float* b_row = B + k * N;
+    
+    if (quant_level == 0) {
+        const float* B_data = (const float*)B.data;
+        for (int i = 0; i < M; ++i) {
+            for (int k = 0; k < K; ++k) {
+                float val = A[i * K + k];
+                const float* b_row = B_data + k * N;
+                float* c_row = C + i * N;
+                for (int j = 0; j < N; ++j) {
+                    c_row[j] += val * b_row[j];
+                }
+            }
+        }
+    } else if (quant_level == 1) {
+        const uint16_t* B_data = (const uint16_t*)B.data;
+        for (int i = 0; i < M; ++i) {
+            for (int k = 0; k < K; ++k) {
+                float val = A[i * K + k];
+                const uint16_t* b_row = B_data + k * N;
+                float* c_row = C + i * N;
+                for (int j = 0; j < N; ++j) {
+                    c_row[j] += val * dequantize_bf16(b_row[j]);
+                }
+            }
+        }
+    } else if (quant_level == 2) {
+        const int8_t* B_data = (const int8_t*)B.data;
+        for (int i = 0; i < M; ++i) {
+            for (int k = 0; k < K; ++k) {
+                float val = A[i * K + k];
+                const int8_t* b_row = B_data + k * N;
+                float* c_row = C + i * N;
+                for (int j = 0; j < N; ++j) {
+                    c_row[j] += val * b_row[j];
+                }
+            }
+        }
+        // Multiply entire output by scale factor
+        float scale = B.scale;
+        for (int i = 0; i < M * N; ++i) {
+            C[i] *= scale;
+        }
+    }
+}
+
+void GPTInference::matmul_transposed_b(const float* A, const QuantizedTensor& B, float* C, int M, int K, int N, int quant_level) {
+    if (quant_level == 0) {
+        const float* B_data = (const float*)B.data;
+        for (int i = 0; i < M; ++i) {
+            const float* a_row = A + i * K;
             float* c_row = C + i * N;
             for (int j = 0; j < N; ++j) {
-                c_row[j] += val * b_row[j];
+                const float* b_row = B_data + j * K;
+                float sum = 0.0f;
+                for (int k = 0; k < K; ++k) {
+                    sum += a_row[k] * b_row[k];
+                }
+                c_row[j] = sum;
+            }
+        }
+    } else if (quant_level == 1) {
+        const uint16_t* B_data = (const uint16_t*)B.data;
+        for (int i = 0; i < M; ++i) {
+            const float* a_row = A + i * K;
+            float* c_row = C + i * N;
+            for (int j = 0; j < N; ++j) {
+                const uint16_t* b_row = B_data + j * K;
+                float sum = 0.0f;
+                for (int k = 0; k < K; ++k) {
+                    sum += a_row[k] * dequantize_bf16(b_row[k]);
+                }
+                c_row[j] = sum;
+            }
+        }
+    } else if (quant_level == 2) {
+        const int8_t* B_data = (const int8_t*)B.data;
+        float scale = B.scale;
+        for (int i = 0; i < M; ++i) {
+            const float* a_row = A + i * K;
+            float* c_row = C + i * N;
+            for (int j = 0; j < N; ++j) {
+                const int8_t* b_row = B_data + j * K;
+                float sum = 0.0f;
+                for (int k = 0; k < K; ++k) {
+                    sum += a_row[k] * b_row[k];
+                }
+                c_row[j] = sum * scale;
             }
         }
     }
 }
 
-// Matrix multiplication with transposed B: C = A * B^T
-// A is M x K, B is N x K (since B is transposed, its original shape before transpose was N x K)
-// C is M x N
-void GPTInference::matmul_transposed_b(const float* A, const float* B, float* C, int M, int K, int N) {
-    for (int i = 0; i < M; ++i) {
-        const float* a_row = A + i * K;
-        float* c_row = C + i * N;
-        for (int j = 0; j < N; ++j) {
-            const float* b_row = B + j * K;
-            float sum = 0.0f;
-            for (int k = 0; k < K; ++k) {
-                sum += a_row[k] * b_row[k];
-            }
-            c_row[j] = sum;
-        }
-    }
-}
-
-void GPTInference::layernorm(const float* x, const float* gamma, const float* beta, float* out, int T, int C) {
+void GPTInference::layernorm(const float* x, const QuantizedTensor& gamma, const QuantizedTensor& beta, float* out, int T, int C, int quant_level) {
     for (int t = 0; t < T; ++t) {
         const float* x_row = x + t * C;
         float* out_row = out + t * C;
 
-        // Calculate mean
         float mean = 0.0f;
-        for (int c = 0; c < C; ++c) {
-            mean += x_row[c];
-        }
+        for (int c = 0; c < C; ++c) mean += x_row[c];
         mean /= C;
 
-        // Calculate variance
         float var = 0.0f;
         for (int c = 0; c < C; ++c) {
             float diff = x_row[c] - mean;
@@ -357,10 +570,28 @@ void GPTInference::layernorm(const float* x, const float* gamma, const float* be
         }
         var /= C;
 
-        // Normalize and scale/shift
         float std_dev = 1.0f / sqrtf(var + 1e-5f);
-        for (int c = 0; c < C; ++c) {
-            out_row[c] = (x_row[c] - mean) * std_dev * gamma[c] + beta[c];
+        
+        if (quant_level == 0) {
+            const float* g_data = (const float*)gamma.data;
+            const float* b_data = (const float*)beta.data;
+            for (int c = 0; c < C; ++c) {
+                out_row[c] = (x_row[c] - mean) * std_dev * g_data[c] + b_data[c];
+            }
+        } else if (quant_level == 1) {
+            const uint16_t* g_data = (const uint16_t*)gamma.data;
+            const uint16_t* b_data = (const uint16_t*)beta.data;
+            for (int c = 0; c < C; ++c) {
+                out_row[c] = (x_row[c] - mean) * std_dev * dequantize_bf16(g_data[c]) + dequantize_bf16(b_data[c]);
+            }
+        } else if (quant_level == 2) {
+            const int8_t* g_data = (const int8_t*)gamma.data;
+            const int8_t* b_data = (const int8_t*)beta.data;
+            float g_scale = gamma.scale;
+            float b_scale = beta.scale;
+            for (int c = 0; c < C; ++c) {
+                out_row[c] = (x_row[c] - mean) * std_dev * (g_data[c] * g_scale) + (b_data[c] * b_scale);
+            }
         }
     }
 }
@@ -388,5 +619,17 @@ void GPTInference::softmax(float* x, int size) {
 
     for (int i = 0; i < size; ++i) {
         x[i] /= sum_exp;
+    }
+}
+
+std::string GPTInference::decode_token(int token_id) const {
+    if (token_id < 0 || token_id >= config.vocab_size) return "";
+    if (config.tokenizer_type == 0) {
+        return std::string(1, id_to_char[token_id]);
+    } else {
+        if (token_id < (int)bpe_vocab.size()) {
+            return bpe_vocab[token_id];
+        }
+        return "";
     }
 }
