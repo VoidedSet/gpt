@@ -17,7 +17,7 @@
 #include <Wire.h>
 #include <U8x8lib.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include "GPTInference.hpp"
 
 // --- Hardware Pins Configuration ---
@@ -61,28 +61,27 @@ void setup() {
   u8x8.drawString(0, 0, "ESP32 GPT Init...");
   u8x8.drawString(0, 2, "Mounting FS...");
 
-  // Mount SPIFFS filesystem
-  if (!SPIFFS.begin(true)) {
-    Serial.println("[-] Error: SPIFFS mount failed!");
+  // Mount LittleFS filesystem
+  if (!LittleFS.begin(true)) {
+    Serial.println("[-] Error: LittleFS mount failed!");
     u8x8.drawString(0, 3, "FS Mount ERROR!");
     while (1) delay(1000);
   }
-  Serial.println("[+] SPIFFS mounted successfully.");
+  Serial.println("[+] LittleFS mounted successfully.");
   u8x8.drawString(0, 2, "FS Mounted.    ");
   u8x8.drawString(0, 4, "Loading model...");
 
   // Check if model file exists
-  if (!SPIFFS.exists("/macbeth.bin")) {
-    Serial.println("[-] Error: /macbeth.bin not found in SPIFFS!");
-    Serial.println("[!] Please upload the model file using the ESP32 sketch data uploader tool.");
+  if (!LittleFS.exists("/macbeth.bin")) {
+    Serial.println("[-] Error: /macbeth.bin not found in LittleFS!");
+    Serial.println("[!] Please upload the model file using PlatformIO.");
     u8x8.drawString(0, 4, "macbeth.bin not");
-    u8x8.drawString(0, 5, "found in SPIFFS");
+    u8x8.drawString(0, 5, "found in LittleFS");
     while (1) delay(1000);
   }
 
-  // Load GPT Model from SPIFFS
-  // Note: load_model takes a filepath. In Arduino SPIFFS, paths start with "/"
-  if (!model.load_model("/spiffs/macbeth.bin")) {
+  // Load GPT Model from LittleFS
+  if (!model.load_model("/littlefs/macbeth.bin")) {
     Serial.println("[-] Error: Failed to load GPT model weights!");
     u8x8.drawString(0, 4, "Load weight ERR");
     while (1) delay(1000);
