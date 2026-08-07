@@ -20,10 +20,11 @@ void LayerNorm::forward(NastyTensors& X) const {
     size_t T = X.shape()[1];
     size_t C = X.shape()[2];
 
+    x_hat_ = NastyTensors({B, T, C});
+    mean_ = NastyTensors({B, T});
+    var_ = NastyTensors({B, T});
+    
     if (gamma_.device_data() != nullptr) {
-        x_hat_ = NastyTensors({B, T, C});
-        mean_ = NastyTensors({B, T});
-        var_ = NastyTensors({B, T});
 
         x_hat_.to_gpu(DATA_);
         mean_.to_gpu(DATA_);
@@ -42,9 +43,9 @@ void LayerNorm::forward(NastyTensors& X) const {
         return;
     }
 
-    x_hat_ = NastyTensors({B, T, C});
-    mean_ = NastyTensors({B, T});
-    var_ = NastyTensors({B, T});
+    // x_hat_ = NastyTensors({B, T, C});
+    // mean_ = NastyTensors({B, T});
+    // var_ = NastyTensors({B, T});
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t t = 0; t < T; ++t) {
