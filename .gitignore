@@ -1,6 +1,6 @@
 build
 .vscode
-*.bin
+# *.bin
 esp32_inference/data/
 .pio/
 esp32_inference/.pio/
