@@ -1,4 +1,5 @@
 #include "GPT.hpp"
+#include <iostream>
 #include <cmath>
 #include <cassert>
 #include <cstdlib>
@@ -46,6 +47,11 @@ float GPT::backward(const std::vector<int>& targets) {
     NastyTensors dZ({B * T, V}, 0.0f);
     float total_loss = 0.0f;
     float* dz_ptr = dZ.data();
+
+    if (logits_.device_data() != nullptr) {
+        logits_.to_cpu(DATA_);
+    }
+
     const float* logits_ptr = logits_.data();
 
     for (size_t i = 0; i < B * T; ++i) {
@@ -78,7 +84,49 @@ float GPT::backward(const std::vector<int>& targets) {
 
     total_loss /= (B * T);
 
+    if (logits_.device_data() != nullptr) {
+        dZ.to_gpu(DATA_);
+        embedding_.wte().to_gpu(GRAD_);
+
+        NastyTensors dX_norm_2d = dZ.matmul(embedding_.wte());
+
+
+
+        NastyTensors x_norm_2d = ln_f_.x_hat().reshape({B * T, C});
+        
+        NastyTensors::gemm(true, false, 
+                           V, C, B * T, 
+                           1.0f, 
+                           dZ.device_data(), V, 
+                           x_norm_2d.device_data(), C, 
+                           1.0f, 
+                           embedding_.wte().device_grad(), C);
+
+
+
+        NastyTensors dX_norm = dX_norm_2d.reshape({B, T, C});
+        NastyTensors dX_blocks({B, T, C});
+        ln_f_.backward(dX_norm, dX_blocks);
+
+
+
+        NastyTensors curr_grad = dX_blocks;
+        for (int l = static_cast<int>(num_layers_) - 1; l >= 0; --l) {
+            NastyTensors next_grad({B, T, C});
+            blocks_[l].backward(curr_grad, next_grad);
+            curr_grad = next_grad;
+        }
+
+        embedding_.backward(curr_grad);
+
+
+
+        return total_loss;
+    }
+
     NastyTensors dX_norm_2d = dZ.matmul(embedding_.wte());
+
+
 
     float* dwte = embedding_.wte().grad();
     NastyTensors x_norm_2d = ln_f_.x_hat().reshape({B * T, C});
@@ -96,6 +144,8 @@ float GPT::backward(const std::vector<int>& targets) {
     NastyTensors dX_norm = dX_norm_2d.reshape({B, T, C});
     NastyTensors dX_blocks({B, T, C});
     ln_f_.backward(dX_norm, dX_blocks);
+
+
 
     NastyTensors curr_grad = dX_blocks;
     for (int l = static_cast<int>(num_layers_) - 1; l >= 0; --l) {

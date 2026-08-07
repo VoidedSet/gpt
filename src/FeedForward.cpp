@@ -1,6 +1,7 @@
 #include "FeedForward.hpp"
 #include "CudaKernels.hpp"
 #include <cuda_runtime.h>
+#include <iostream>
 #include <random>
 #include <cmath>
 #include <cassert>
@@ -129,6 +130,10 @@ void FeedForward::backward(const NastyTensors& dY, NastyTensors& dX) {
                            1.0f, 
                            w_fc_.device_grad(), 4 * C);
 
+
+
+
+
         launch_accumulate_bias_grad(dh1_2d.device_data(), b_fc_.device_grad(), B * T, 4 * C);
 
         NastyTensors dX_reshaped = dX_2d.reshape({B, T, C});
@@ -161,6 +166,8 @@ void FeedForward::backward(const NastyTensors& dY, NastyTensors& dX) {
     const float* h1_ptr = h1_2d_.data();
     size_t size_4c = B * T * 4 * C;
 
+
+
     for (size_t i = 0; i < size_4c; ++i) {
         float x = h1_ptr[i];
         float x3 = x * x * x;
@@ -169,6 +176,8 @@ void FeedForward::backward(const NastyTensors& dY, NastyTensors& dX) {
         float dgelu = 0.5f * (1.0f + t) + 0.5f * x * (1.0f - t * t) * 0.79788456f * (1.0f + 0.134145f * x * x);
         dh1_ptr[i] = dh2_ptr[i] * dgelu;
     }
+
+
 
     NastyTensors dX_2d = dh1_2d.matmul_transposed_b(w_fc_);
 

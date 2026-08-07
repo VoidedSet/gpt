@@ -209,6 +209,10 @@ NastyTensors NastyTensors::reshape(const std::vector<size_t>& new_shape) const {
 
 NastyTensors& NastyTensors::operator+=(const NastyTensors& other) {
     assert(this->size() == other.size());
+    if (d_data_ != nullptr) {
+        launch_add_tensors(device_data(), other.device_data(), size());
+        return *this;
+    }
     float* dest = this->data();
     const float* src = other.data();
     size_t n = this->size();
@@ -353,8 +357,8 @@ void NastyTensors::to_gpu(int type)
             d_data_ = std::shared_ptr<float>(raw_gpu_ptr, [](float* p){
                 if(p) cudaFree(p);
             });
+            cudaMemcpy(d_data_.get(), data(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
         }        
-        cudaMemcpy(d_data_.get(), data(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
     } else if(type == GRAD_){
         if(!d_grad_){
             float* raw_gpu_ptr = nullptr;
@@ -362,8 +366,8 @@ void NastyTensors::to_gpu(int type)
             d_grad_ = std::shared_ptr<float>(raw_gpu_ptr, [](float* p){
                 if (p) cudaFree(p);
             });
+            cudaMemcpy(d_grad_.get(), grad(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
         }
-        cudaMemcpy(d_grad_.get(), grad(), (size() * sizeof(float)), cudaMemcpyHostToDevice);
     }
 }
 

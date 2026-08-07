@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cassert>
 #include <cuda_runtime.h>
+#include <iostream>
 
 LayerNorm::LayerNorm(size_t embedding_dim, float epsilon)
     : embedding_dim_(embedding_dim), epsilon_(epsilon),
@@ -97,6 +98,9 @@ void LayerNorm::backward(const NastyTensors& dY, NastyTensors& dX) {
             dX.device_data(),
             B, T, C, epsilon_
         );
+
+
+
         return;
     }
 
@@ -131,4 +135,6 @@ void LayerNorm::backward(const NastyTensors& dY, NastyTensors& dX) {
             }
         }
     }
+
+
 }
