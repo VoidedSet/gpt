@@ -68,10 +68,26 @@ int main() {
     std::cout << "[*] Training starting...\n";
     auto train_start = chrono::high_resolution_clock::now();
     
-    int total_steps = 10000;
+    int total_steps = 50000;
+    float max_lr = 1e-3f;
+    float min_lr = 1e-4f;
+    int warmup_steps = 1000;
+    const float PI = 3.1415926535f;
+
     for (int step = 0; step < total_steps; ++step) {
         auto step_start = chrono::high_resolution_clock::now();
         
+        // Cosine Decay with Linear Warmup
+        float curr_lr = min_lr;
+        if (step < warmup_steps) {
+            curr_lr = max_lr * (float)step / warmup_steps;
+        } else {
+            float decay_ratio = (float)(step - warmup_steps) / (total_steps - warmup_steps);
+            float coeff = 0.5f * (1.0f + std::cos(PI * decay_ratio));
+            curr_lr = min_lr + coeff * (max_lr - min_lr);
+        }
+        optimizer.set_lr(curr_lr);
+
         loader.get_batch(X_train, Y_train);
         
         optimizer.zero_grad();
@@ -87,12 +103,13 @@ int main() {
         double step_ms = step_dur.count();
         double tokens_per_sec = (B_train * T_train) / (step_ms / 1000.0);
 
-        if (step % 50 == 0 || step == total_steps - 1) {
+        if (step % 100 == 0 || step == total_steps - 1) {
             std::cout << "  Step " << step << " | Loss: " << loss 
+                      << " | LR: " << curr_lr
                       << " | Speed: " << step_ms << " ms/step (" << tokens_per_sec << " tok/sec)\n";
         }
 
-        if ((step > 0 && step % 300 == 0) || step == total_steps - 1) {
+        if ((step > 0 && step % 1000 == 0) || step == total_steps - 1) {
             std::cout << "\n  --- [Step " << step << "] Intermediate Generation snippet ---\n";
             std::vector<int> intermediate_gen = gpt_model.generate(prompt, 80);
             std::cout << tokenizer.decode(intermediate_gen) << "\n";
