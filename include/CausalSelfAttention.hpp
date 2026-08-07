@@ -17,7 +17,7 @@ private:
     mutable NastyTensors x_2d_;
     mutable NastyTensors qkv_;
     mutable NastyTensors o_;
-    mutable std::vector<float> att_probs_;
+    mutable NastyTensors att_probs_;
 
     void init_weights();
 

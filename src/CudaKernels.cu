@@ -201,3 +201,125 @@ void launch_accumulate_bias_grad(const float* dY, float* dbias, int rows, int co
     int blocksPerGrid = (cols + threadsPerBlock - 1) / threadsPerBlock;
     accumulate_bias_grad_kernel<<<blocksPerGrid, threadsPerBlock>>>(dY, dbias, rows, cols);
 }
+
+__global__ void attention_forward_kernel(const float* qkv, float* att_probs, float* O, 
+                                         int B, int T, int C, int num_heads, int head_dim, float scale) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_queries = B * num_heads * T;
+    if (idx < total_queries) {
+        int b = idx / (num_heads * T);
+        int head = (idx / T) % num_heads;
+        int t_q = idx % T;
+
+        float scores[1024];
+
+        // 1. Compute dot products (Query x Key)
+        for (int t_k = 0; t_k <= t_q; ++t_k) {
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim; ++d) {
+                float q = qkv[b * T * 3 * C + t_q * 3 * C + head * head_dim + d];
+                float k = qkv[b * T * 3 * C + t_k * 3 * C + C + head * head_dim + d];
+                dot += q * k;
+            }
+            scores[t_k] = dot * scale;
+        }
+
+        // 2. Softmax
+        float max_val = scores[0];
+        for (int t_k = 1; t_k <= t_q; ++t_k) {
+            if (scores[t_k] > max_val) {
+                max_val = scores[t_k];
+            }
+        }
+
+        float sum_exp = 0.0f;
+        for (int t_k = 0; t_k <= t_q; ++t_k) {
+            scores[t_k] = expf(scores[t_k] - max_val);
+            sum_exp += scores[t_k];
+        }
+
+        int att_offset = b * num_heads * T * T + head * T * T + t_q * T;
+        for (int t_k = 0; t_k <= t_q; ++t_k) {
+            float p = scores[t_k] / sum_exp;
+            scores[t_k] = p;
+            att_probs[att_offset + t_k] = p;
+        }
+        for (int t_k = t_q + 1; t_k < T; ++t_k) {
+            att_probs[att_offset + t_k] = 0.0f;
+        }
+
+        // 3. Value aggregation
+        for (int d = 0; d < head_dim; ++d) {
+            float val_sum = 0.0f;
+            for (int t_k = 0; t_k <= t_q; ++t_k) {
+                float v = qkv[b * T * 3 * C + t_k * 3 * C + 2 * C + head * head_dim + d];
+                val_sum += scores[t_k] * v;
+            }
+            O[b * T * C + t_q * C + head * head_dim + d] = val_sum;
+        }
+    }
+}
+
+__global__ void attention_backward_kernel(const float* dO, const float* qkv, const float* att_probs, float* dqkv,
+                                          int B, int T, int C, int num_heads, int head_dim, float scale) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_queries = B * num_heads * T;
+    if (idx < total_queries) {
+        int b = idx / (num_heads * T);
+        int head = (idx / T) % num_heads;
+        int t_q = idx % T;
+
+        int att_offset = b * num_heads * T * T + head * T * T + t_q * T;
+        float dp_vec[1024];
+        float sum_dp_p = 0.0f;
+
+        // 1. Compute dot product of dO and V
+        for (int t_k = 0; t_k <= t_q; ++t_k) {
+            float dp = 0.0f;
+            for (int d = 0; d < head_dim; ++d) {
+                float do_val = dO[b * T * C + t_q * C + head * head_dim + d];
+                float v = qkv[b * T * 3 * C + t_k * 3 * C + 2 * C + head * head_dim + d];
+                dp += do_val * v;
+            }
+            dp_vec[t_k] = dp;
+            float p = att_probs[att_offset + t_k];
+            sum_dp_p += dp * p;
+        }
+
+        // 2. Accumulate gradients
+        for (int t_k = 0; t_k <= t_q; ++t_k) {
+            float p = att_probs[att_offset + t_k];
+            float dS_scaled = p * (dp_vec[t_k] - sum_dp_p) * scale;
+
+            for (int d = 0; d < head_dim; ++d) {
+                // Gradient for V (value) at t_k
+                float do_val = dO[b * T * C + t_q * C + head * head_dim + d];
+                atomicAdd(&dqkv[b * T * 3 * C + t_k * 3 * C + 2 * C + head * head_dim + d], p * do_val);
+
+                // Gradient for Q (query) at t_q
+                float k = qkv[b * T * 3 * C + t_k * 3 * C + C + head * head_dim + d];
+                atomicAdd(&dqkv[b * T * 3 * C + t_q * 3 * C + head * head_dim + d], dS_scaled * k);
+
+                // Gradient for K (key) at t_k
+                float q = qkv[b * T * 3 * C + t_q * 3 * C + head * head_dim + d];
+                atomicAdd(&dqkv[b * T * 3 * C + t_k * 3 * C + C + head * head_dim + d], dS_scaled * q);
+            }
+        }
+    }
+}
+
+void launch_attention_forward(const float* qkv, float* att_probs, float* O, 
+                              int B, int T, int C, int num_heads, int head_dim, float scale) {
+    int N = B * num_heads * T;
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    attention_forward_kernel<<<blocksPerGrid, threadsPerBlock>>>(qkv, att_probs, O, B, T, C, num_heads, head_dim, scale);
+}
+
+void launch_attention_backward(const float* dO, const float* qkv, const float* att_probs, float* dqkv,
+                               int B, int T, int C, int num_heads, int head_dim, float scale) {
+    int N = B * num_heads * T;
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+    attention_backward_kernel<<<blocksPerGrid, threadsPerBlock>>>(dO, qkv, att_probs, dqkv, B, T, C, num_heads, head_dim, scale);
+}

@@ -21,3 +21,9 @@ void launch_gelu_backward(const float* h1, const float* dh2, float* dh1, int N);
 
 void launch_add_bias(float* X, const float* bias, int rows, int cols);
 void launch_accumulate_bias_grad(const float* dY, float* dbias, int rows, int cols);
+
+void launch_attention_forward(const float* qkv, float* att_probs, float* O, 
+                              int B, int T, int C, int num_heads, int head_dim, float scale);
+
+void launch_attention_backward(const float* dO, const float* qkv, const float* att_probs, float* dqkv,
+                               int B, int T, int C, int num_heads, int head_dim, float scale);

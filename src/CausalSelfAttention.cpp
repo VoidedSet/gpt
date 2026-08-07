@@ -1,4 +1,6 @@
 #include "CausalSelfAttention.hpp"
+#include "CudaKernels.hpp"
+#include <cuda_runtime.h>
 #include <random>
 #include <cmath>
 #include <cassert>
@@ -42,8 +44,39 @@ NastyTensors CausalSelfAttention::forward(const NastyTensors& X) const {
     size_t B = X.shape()[0];
     size_t T = X.shape()[1];
     size_t C = X.shape()[2];
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
 
     x_2d_ = X.reshape({B * T, C}).clone();
+
+    if (w_qkv_.device_data() != nullptr) {
+        x_2d_.to_gpu(DATA_);
+
+        NastyTensors qkv_2d = x_2d_.matmul(w_qkv_);
+        launch_add_bias(qkv_2d.device_data(), b_qkv_.device_data(), B * T, 3 * C);
+
+        qkv_ = qkv_2d.reshape({B, T, 3 * C}).clone();
+        NastyTensors O({B, T, C}, 0.0f);
+        O.to_gpu(DATA_);
+
+        att_probs_ = NastyTensors({B * num_heads_ * T * T}, 0.0f);
+        att_probs_.to_gpu(DATA_);
+
+        launch_attention_forward(
+            qkv_.device_data(), 
+            att_probs_.device_data(), 
+            O.device_data(), 
+            B, T, C, num_heads_, head_dim_, scale
+        );
+
+        o_ = O.clone();
+
+        NastyTensors o_2d = O.reshape({B * T, C});
+        NastyTensors proj_2d = o_2d.matmul(w_proj_);
+        launch_add_bias(proj_2d.device_data(), b_proj_.device_data(), B * T, C);
+
+        return proj_2d.reshape({B, T, C});
+    }
+
     NastyTensors qkv_2d = x_2d_.matmul(w_qkv_);
 
     float* qkv_ptr = qkv_2d.data();
@@ -58,10 +91,8 @@ NastyTensors CausalSelfAttention::forward(const NastyTensors& X) const {
 
     qkv_ = qkv_2d.reshape({B, T, 3 * C}).clone();
     NastyTensors O({B, T, C}, 0.0f);
-    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
 
-    att_probs_.resize(B * num_heads_ * T * T);
-    std::fill(att_probs_.begin(), att_probs_.end(), 0.0f);
+    att_probs_ = NastyTensors({B * num_heads_ * T * T}, 0.0f);
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t head = 0; head < num_heads_; ++head) {
@@ -93,7 +124,7 @@ NastyTensors CausalSelfAttention::forward(const NastyTensors& X) const {
 
                 for (size_t t_k = 0; t_k <= t_q; ++t_k) {
                     scores[t_k] /= sum_exp;
-                    att_probs_[b * num_heads_ * T * T + head * T * T + t_q * T + t_k] = scores[t_k];
+                    att_probs_(b * num_heads_ * T * T + head * T * T + t_q * T + t_k) = scores[t_k];
                 }
 
                 for (size_t d = 0; d < head_dim_; ++d) {
@@ -131,6 +162,59 @@ void CausalSelfAttention::backward(const NastyTensors& dY, NastyTensors& dX) {
     size_t C = dY.shape()[2];
     assert(C == embedding_dim_);
 
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
+
+    if (w_qkv_.device_data() != nullptr) {
+        w_proj_.to_gpu(GRAD_);
+        b_proj_.to_gpu(GRAD_);
+        w_qkv_.to_gpu(GRAD_);
+        b_qkv_.to_gpu(GRAD_);
+        dX.to_gpu(DATA_);
+
+        NastyTensors dY_2d = dY.reshape({B * T, C});
+        NastyTensors dO_2d = dY_2d.matmul_transposed_b(w_proj_);
+        NastyTensors dO = dO_2d.reshape({B, T, C});
+
+        NastyTensors::gemm(true, false, 
+                           C, C, B * T, 
+                           1.0f, 
+                           o_.device_data(), C, 
+                           dY_2d.device_data(), C, 
+                           1.0f, 
+                           w_proj_.device_grad(), C);
+
+        launch_accumulate_bias_grad(dY_2d.device_data(), b_proj_.device_grad(), B * T, C);
+
+        NastyTensors dqkv({B, T, 3 * C}, 0.0f);
+        dqkv.to_gpu(DATA_);
+
+        launch_attention_backward(
+            dO.device_data(), 
+            qkv_.device_data(), 
+            att_probs_.device_data(), 
+            dqkv.device_data(), 
+            B, T, C, num_heads_, head_dim_, scale
+        );
+
+        NastyTensors dqkv_2d = dqkv.reshape({B * T, 3 * C});
+        NastyTensors dX_2d = dqkv_2d.matmul_transposed_b(w_qkv_);
+
+        NastyTensors::gemm(true, false, 
+                           C, 3 * C, B * T, 
+                           1.0f, 
+                           x_2d_.device_data(), C, 
+                           dqkv_2d.device_data(), 3 * C, 
+                           1.0f, 
+                           w_qkv_.device_grad(), 3 * C);
+
+        launch_accumulate_bias_grad(dqkv_2d.device_data(), b_qkv_.device_grad(), B * T, 3 * C);
+
+        NastyTensors dX_reshaped = dX_2d.reshape({B, T, C});
+        cudaMemcpy(dX.device_data(), dX_reshaped.device_data(), B * T * C * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        return;
+    }
+
     NastyTensors dY_2d = dY.reshape({B * T, C});
     NastyTensors dO_2d = dY_2d.matmul_transposed_b(w_proj_);
     NastyTensors dO = dO_2d.reshape({B, T, C});
@@ -152,7 +236,6 @@ void CausalSelfAttention::backward(const NastyTensors& dY, NastyTensors& dX) {
     }
 
     NastyTensors dqkv({B, T, 3 * C}, 0.0f);
-    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim_));
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t head = 0; head < num_heads_; ++head) {
@@ -167,12 +250,12 @@ void CausalSelfAttention::backward(const NastyTensors& dY, NastyTensors& dX) {
                         dp += dO(b, t_q, head * head_dim_ + d) * qkv_(b, t_k, 2 * C + head * head_dim_ + d);
                     }
                     dp_vec[t_k] = dp;
-                    float p = att_probs_[att_offset + t_k];
+                    float p = att_probs_(att_offset + t_k);
                     sum_dp_p += dp * p;
                 }
 
                 for (size_t t_k = 0; t_k <= t_q; ++t_k) {
-                    float p = att_probs_[att_offset + t_k];
+                    float p = att_probs_(att_offset + t_k);
                     float dS = p * (dp_vec[t_k] - sum_dp_p);
                     float dS_scaled = dS * scale;
 
