@@ -1,5 +1,6 @@
 #include "GPT.hpp"
 #include <iostream>
+#include <fstream>
 #include <cmath>
 #include <cassert>
 #include <cstdlib>
@@ -228,4 +229,53 @@ std::vector<int> GPT::generate(const std::vector<int>& prompt, size_t max_new_to
         generated.push_back(next_token);
     }
     return generated;
+}
+
+bool GPT::save_binary(const std::string& filepath, const std::vector<char>& id_to_char) const {
+    std::ofstream out(filepath, std::ios::binary);
+    if (!out.is_open()) {
+        std::cerr << "[-] Error: Failed to open file for saving model weights: " << filepath << "\n";
+        return false;
+    }
+
+    int magic = 0x47505432; // 'GPT2' in ASCII hex
+    int version = 1;
+    int vocab_size = static_cast<int>(vocab_size_);
+    int max_seq_len = static_cast<int>(max_seq_len_);
+    int embedding_dim = static_cast<int>(embedding_dim_);
+    int num_heads = static_cast<int>(num_heads_);
+    int num_layers = static_cast<int>(num_layers_);
+
+    out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+    out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+    out.write(reinterpret_cast<const char*>(&vocab_size), sizeof(vocab_size));
+    out.write(reinterpret_cast<const char*>(&max_seq_len), sizeof(max_seq_len));
+    out.write(reinterpret_cast<const char*>(&embedding_dim), sizeof(embedding_dim));
+    out.write(reinterpret_cast<const char*>(&num_heads), sizeof(num_heads));
+    out.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+
+    // Write vocab
+    assert(id_to_char.size() == vocab_size_);
+    out.write(id_to_char.data(), vocab_size * sizeof(char));
+
+    // Pad to 4-byte boundary for float alignment
+    size_t vocab_bytes = vocab_size * sizeof(char);
+    size_t padding = (4 - (vocab_bytes % 4)) % 4;
+    if (padding > 0) {
+        char pad[3] = {0, 0, 0};
+        out.write(pad, padding);
+    }
+
+    // Cast away constness to call get_parameters()
+    GPT* non_const_this = const_cast<GPT*>(this);
+    std::vector<NastyTensors*> params = non_const_this->get_parameters();
+
+    for (auto* param : params) {
+        // Move GPU parameters to CPU if necessary
+        param->to_cpu(DATA_);
+        out.write(reinterpret_cast<const char*>(param->data()), param->size() * sizeof(float));
+    }
+
+    std::cout << "[+] Saved model binary to " << filepath << "\n";
+    return true;
 }

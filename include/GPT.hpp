@@ -31,4 +31,5 @@ public:
 
     std::vector<NastyTensors*> get_parameters();
     std::vector<int> generate(const std::vector<int>& prompt, size_t max_new_tokens);
+    bool save_binary(const std::string& filepath, const std::vector<char>& id_to_char) const;
 };
