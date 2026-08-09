@@ -31,7 +31,7 @@ int main() {
     tokenizer.build_vocab_bpe(target_vocab_size);
     tokenizer.encode();
 
-    size_t B_train = 16;
+    size_t B_train = 8;
     size_t T_train = 128;
     DataLoader loader(tokenizer.get_tokens(), B_train, T_train);
 
@@ -68,10 +68,10 @@ int main() {
     std::cout << "[*] Training starting...\n";
     auto train_start = chrono::high_resolution_clock::now();
     
-    int total_steps = 100000;
+    int total_steps = 75000;
     float max_lr = 1e-3f;
     float min_lr = 1e-4f;
-    int warmup_steps = 2000;
+    int warmup_steps = 1500;
     const float PI = 3.1415926535f;
 
     for (int step = 0; step < total_steps; ++step) {
