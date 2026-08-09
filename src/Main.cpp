@@ -21,20 +21,24 @@ int main() {
 
     std::cout << "[*] Running GPT Training Loop...\n";
     Tokenizer tokenizer;
-    if (!tokenizer.load_file("dataset/input.txt"))
-        return 1;
+    // Load complete Works of Shakespeare if available, fallback to tiny shakespeare
+    if (!tokenizer.load_file("dataset/complete_shakespeare.txt")) {
+        if (!tokenizer.load_file("dataset/input.txt"))
+            return 1;
+    }
 
-    tokenizer.build_vocab();
+    int target_vocab_size = 512; // BPE vocabulary size
+    tokenizer.build_vocab_bpe(target_vocab_size);
     tokenizer.encode();
 
-    size_t B_train = 16;
-    size_t T_train = 64;
+    size_t B_train = 8;
+    size_t T_train = 128;
     DataLoader loader(tokenizer.get_tokens(), B_train, T_train);
 
     size_t vocab_size = tokenizer.get_vocab_size();
-    size_t max_seq_len = 64;
-    size_t embedding_dim = 192;
-    size_t num_heads = 6;
+    size_t max_seq_len = 128;
+    size_t embedding_dim = 256;
+    size_t num_heads = 8;
     size_t num_layers = 4;
 
     std::cout << "Creating GPT Model (vocab_size=" << vocab_size 
@@ -56,7 +60,7 @@ int main() {
     srand(1337);
 
     std::cout << "\n--- Generating with untrained model ---\n";
-    std::vector<int> prompt = {tokenizer.char_to_token('T'), tokenizer.char_to_token('h'), tokenizer.char_to_token('e'), tokenizer.char_to_token(' ')};
+    std::vector<int> prompt = tokenizer.encode_string("The ");
     std::vector<int> gen_tokens = gpt_model.generate(prompt, 100);
     std::cout << tokenizer.decode(gen_tokens) << "\n";
     std::cout << "---------------------------------------\n\n";
@@ -64,10 +68,26 @@ int main() {
     std::cout << "[*] Training starting...\n";
     auto train_start = chrono::high_resolution_clock::now();
     
-    int total_steps = 10000;
+    int total_steps = 75000;
+    float max_lr = 1e-3f;
+    float min_lr = 1e-4f;
+    int warmup_steps = 1500;
+    const float PI = 3.1415926535f;
+
     for (int step = 0; step < total_steps; ++step) {
         auto step_start = chrono::high_resolution_clock::now();
         
+        // Cosine Decay with Linear Warmup
+        float curr_lr = min_lr;
+        if (step < warmup_steps) {
+            curr_lr = max_lr * (float)step / warmup_steps;
+        } else {
+            float decay_ratio = (float)(step - warmup_steps) / (total_steps - warmup_steps);
+            float coeff = 0.5f * (1.0f + std::cos(PI * decay_ratio));
+            curr_lr = min_lr + coeff * (max_lr - min_lr);
+        }
+        optimizer.set_lr(curr_lr);
+
         loader.get_batch(X_train, Y_train);
         
         optimizer.zero_grad();
@@ -83,12 +103,13 @@ int main() {
         double step_ms = step_dur.count();
         double tokens_per_sec = (B_train * T_train) / (step_ms / 1000.0);
 
-        if (step % 50 == 0 || step == total_steps - 1) {
+        if (step % 100 == 0 || step == total_steps - 1) {
             std::cout << "  Step " << step << " | Loss: " << loss 
+                      << " | LR: " << curr_lr
                       << " | Speed: " << step_ms << " ms/step (" << tokens_per_sec << " tok/sec)\n";
         }
 
-        if ((step > 0 && step % 300 == 0) || step == total_steps - 1) {
+        if ((step > 0 && step % 1000 == 0) || step == total_steps - 1) {
             std::cout << "\n  --- [Step " << step << "] Intermediate Generation snippet ---\n";
             std::vector<int> intermediate_gen = gpt_model.generate(prompt, 80);
             std::cout << tokenizer.decode(intermediate_gen) << "\n";
@@ -105,7 +126,7 @@ int main() {
     std::cout << tokenizer.decode(gen_tokens) << "\n";
     std::cout << "-------------------------------------\n";
     
-    gpt_model.save_binary("dataset/macbeth2.bin", tokenizer.get_id_to_char());
+    gpt_model.save_binary("dataset/macbeth3.bin", tokenizer, 3); // 3 = INT4 Quantization
     
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<double> elapsed = end - start;

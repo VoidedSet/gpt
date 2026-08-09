@@ -40,10 +40,38 @@ int tokens_count = 0;
 float* logits = nullptr;
 
 // Helper function to print to Serial and OLED
-void display_char(char c) {
-  Serial.print(c);
-  if (c == '\r') return;
-  u8x8log.print(c);
+void display_string(const std::string& str) {
+  for (char c : str) {
+    Serial.print(c);
+    if (c == '\r') continue;
+    u8x8log.print(c);
+  }
+}
+
+// BPE encoder helper using model merges
+std::vector<int> bpe_encode(const std::string& text, int num_merges, const int* merge_left, const int* merge_right) {
+  std::vector<int> result;
+  result.reserve(text.size());
+  for (char c : text) {
+    result.push_back((unsigned char)c);
+  }
+  for (int m = 0; m < num_merges; ++m) {
+    int left = merge_left[m];
+    int right = merge_right[m];
+    int merged = 256 + m;
+    std::vector<int> next_res;
+    next_res.reserve(result.size());
+    for (size_t i = 0; i < result.size(); ++i) {
+      if (i + 1 < result.size() && result[i] == left && result[i+1] == right) {
+        next_res.push_back(merged);
+        i++;
+      } else {
+        next_res.push_back(result[i]);
+      }
+    }
+    result = std::move(next_res);
+  }
+  return result;
 }
 
 void setup() {
@@ -119,24 +147,35 @@ void setup() {
   }
 
   // Define starting prompt
-  const char* prompt = "The ";
+  std::string prompt = "The ";
   Serial.print("[*] Prompt: ");
-  Serial.println(prompt);
+  Serial.println(prompt.c_str());
 
   // Tokenize prompt
-  tokens_count = 0;
-  for (int i = 0; prompt[i] != '\0'; ++i) {
-    char c = prompt[i];
-    int token_id = -1;
-    for (int j = 0; j < model.config.vocab_size; ++j) {
-      if (model.id_to_char[j] == c) {
-        token_id = j;
-        break;
+  std::vector<int> prompt_tokens;
+  if (model.config.tokenizer_type == 0) {
+    // CHAR mode
+    for (size_t i = 0; i < prompt.size(); ++i) {
+      char c = prompt[i];
+      int token_id = -1;
+      for (int j = 0; j < model.config.vocab_size; ++j) {
+        if (model.id_to_char[j] == c) {
+          token_id = j;
+          break;
+        }
       }
+      if (token_id == -1) token_id = 0;
+      prompt_tokens.push_back(token_id);
     }
-    if (token_id == -1) token_id = 0; // Default fallback
+  } else {
+    // BPE mode
+    prompt_tokens = bpe_encode(prompt, model.num_merges, model.merge_left, model.merge_right);
+  }
+
+  tokens_count = 0;
+  for (int token_id : prompt_tokens) {
     tokens[tokens_count++] = token_id;
-    display_char(c);
+    display_string(model.decode_token(token_id));
   }
 
   randomSeed(analogRead(0));
@@ -174,8 +213,8 @@ void loop() {
   }
 
   // 3. Print the token's character representation
-  char next_char = model.id_to_char[next_token];
-  display_char(next_char);
+  std::string next_str = model.decode_token(next_token);
+  display_string(next_str);
 
   // 4. Update prompt token window
   if (tokens_count >= model.config.max_seq_len) {

@@ -118,4 +118,8 @@ public:
             p->zero_grad();
         }
     }
+
+    void set_lr(float lr) {
+        lr_ = lr;
+    }
 };

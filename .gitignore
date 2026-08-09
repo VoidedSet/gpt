@@ -5,3 +5,5 @@ esp32_inference/data/
 .pio/
 esp32_inference/.pio/
 PlatformIO
+chat
+verify_inference
