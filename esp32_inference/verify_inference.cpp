@@ -37,7 +37,7 @@ int main() {
     GPTInference model;
     
     std::cout << "[*] Loading model...\n";
-    if (!model.load_model("../dataset/macbeth2.bin")) {
+    if (!model.load_model("../dataset/macbeth3.bin")) {
         std::cerr << "[-] Error loading model.\n";
         return 1;
     }

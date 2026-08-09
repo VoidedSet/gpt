@@ -45,7 +45,7 @@ int main() {
     
     std::cout << "[+] Model loaded successfully!\n\n";
     std::cout << "=========================================================\n";
-    std::cout << "       Macbeth GPT Interactive Chat (BPE + INT8)        \n";
+    std::cout << "       Macbeth GPT Interactive Chat (BPE + INT4)        \n";
     std::cout << "=========================================================\n";
     std::cout << "Type a character name or prompt to chat with the model.\n";
     std::cout << "Type 'exit' or 'quit' to close the interface.\n\n";
