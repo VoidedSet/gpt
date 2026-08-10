@@ -344,45 +344,6 @@ bool GPT::save_binary(const std::string& filepath, const Tokenizer& tokenizer, i
                 char pad[3] = {0, 0, 0};
                 out.write(pad, padding);
             }
-        } else if (quant_level == 3) {
-            // INT4: Symmetric scale quantization [-7, 7]
-            float max_val = 0.0f;
-            for (size_t i = 0; i < num_elements; ++i) {
-                float abs_v = std::abs(p_data[i]);
-                if (abs_v > max_val) max_val = abs_v;
-            }
-            
-            float scale = max_val / 7.0f;
-            if (scale == 0.0f) scale = 1.0f;
-            
-            // Write scale (4 bytes float)
-            out.write(reinterpret_cast<const char*>(&scale), sizeof(scale));
-            
-            // Quantize and pack into bytes
-            size_t packed_size = (num_elements + 1) / 2;
-            std::vector<uint8_t> packed_data(packed_size, 0);
-            for (size_t i = 0; i < num_elements; ++i) {
-                float val = p_data[i] / scale;
-                int q = static_cast<int>(std::round(val));
-                if (q > 7) q = 7;
-                if (q < -7) q = -7;
-                
-                size_t byte_idx = i / 2;
-                if (i % 2 == 0) {
-                    packed_data[byte_idx] |= ((q & 0x0F) << 4);
-                } else {
-                    packed_data[byte_idx] |= (q & 0x0F);
-                }
-            }
-            out.write(reinterpret_cast<const char*>(packed_data.data()), packed_size * sizeof(uint8_t));
-            
-            // Align to 4-byte boundary
-            size_t bytes_written = sizeof(scale) + packed_size * sizeof(uint8_t);
-            size_t padding = (4 - (bytes_written % 4)) % 4;
-            if (padding > 0) {
-                char pad[3] = {0, 0, 0};
-                out.write(pad, padding);
-            }
         }
     }
 

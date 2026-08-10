@@ -31,15 +31,15 @@ int main() {
     tokenizer.build_vocab_bpe(target_vocab_size);
     tokenizer.encode();
 
-    size_t B_train = 8;
-    size_t T_train = 128;
+    size_t B_train = 16;
+    size_t T_train = 64;
     DataLoader loader(tokenizer.get_tokens(), B_train, T_train);
 
     size_t vocab_size = tokenizer.get_vocab_size();
-    size_t max_seq_len = 128;
+    size_t max_seq_len = 64;
     size_t embedding_dim = 256;
     size_t num_heads = 8;
-    size_t num_layers = 4;
+    size_t num_layers = 6;
 
     std::cout << "Creating GPT Model (vocab_size=" << vocab_size 
               << ", layers=" << num_layers << ", dim=" << embedding_dim << ")...\n";
@@ -68,10 +68,10 @@ int main() {
     std::cout << "[*] Training starting...\n";
     auto train_start = chrono::high_resolution_clock::now();
     
-    int total_steps = 75000;
+    int total_steps = 50000;
     float max_lr = 1e-3f;
     float min_lr = 1e-4f;
-    int warmup_steps = 1500;
+    int warmup_steps = 1000;
     const float PI = 3.1415926535f;
 
     for (int step = 0; step < total_steps; ++step) {
@@ -126,7 +126,7 @@ int main() {
     std::cout << tokenizer.decode(gen_tokens) << "\n";
     std::cout << "-------------------------------------\n";
     
-    gpt_model.save_binary("dataset/macbeth3.bin", tokenizer, 3); // 3 = INT4 Quantization
+    gpt_model.save_binary("dataset/macbeth2.bin", tokenizer, 2); // 2 = INT8 Quantization
     
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<double> elapsed = end - start;
