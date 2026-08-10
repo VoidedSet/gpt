@@ -38,13 +38,8 @@ static size_t get_param_size_bytes(size_t num_elements, int quant_level) {
         size_t bytes = num_elements * sizeof(uint16_t);
         if (bytes % 4 != 0) bytes += 2; // Add alignment padding
         return bytes;
-    } else if (quant_level == 2) { // quant_level == 2 (INT8)
+    } else { // quant_level == 2 (INT8)
         size_t bytes = sizeof(float) + num_elements * sizeof(int8_t);
-        size_t padding = (4 - (bytes % 4)) % 4;
-        return bytes + padding;
-    } else { // quant_level == 3 (INT4)
-        size_t packed_size = (num_elements + 1) / 2;
-        size_t bytes = sizeof(float) + packed_size * sizeof(uint8_t);
         size_t padding = (4 - (bytes % 4)) % 4;
         return bytes + padding;
     }
@@ -64,7 +59,7 @@ static QuantizedTensor assign_param(uint8_t*& current_ptr, size_t num_elements, 
         if ((num_elements * sizeof(uint16_t)) % 4 != 0) {
             current_ptr += 2; // skip padding
         }
-    } else if (quant_level == 2) { // quant_level == 2 (INT8)
+    } else { // quant_level == 2 (INT8)
         // Read scale factor (4 bytes float)
         tensor.scale = *(float*)current_ptr;
         current_ptr += sizeof(float);
@@ -74,17 +69,6 @@ static QuantizedTensor assign_param(uint8_t*& current_ptr, size_t num_elements, 
         
         // Align to 4-byte boundary
         size_t bytes_written = sizeof(float) + num_elements * sizeof(int8_t);
-        size_t padding = (4 - (bytes_written % 4)) % 4;
-        current_ptr += padding;
-    } else { // quant_level == 3 (INT4)
-        tensor.scale = *(float*)current_ptr;
-        current_ptr += sizeof(float);
-        
-        tensor.data = (void*)current_ptr;
-        size_t packed_size = (num_elements + 1) / 2;
-        current_ptr += packed_size * sizeof(uint8_t);
-        
-        size_t bytes_written = sizeof(float) + packed_size * sizeof(uint8_t);
         size_t padding = (4 - (bytes_written % 4)) % 4;
         current_ptr += padding;
     }
@@ -99,6 +83,7 @@ bool GPTInference::load_model(const char* filepath) {
     }
 
     // Read header up to original size
+    // Note: We need to parse magic and version first to handle layout correctly
     int magic = 0;
     int version = 0;
     if (fread(&magic, sizeof(int), 1, f) != 1 || fread(&version, sizeof(int), 1, f) != 1) {
@@ -151,7 +136,7 @@ bool GPTInference::load_model(const char* filepath) {
     printf("    num_layers: %d\n", config.num_layers);
     printf("    tokenizer_type: %s\n", config.tokenizer_type == 0 ? "CHAR" : "BPE");
     printf("    quantization_level: %d (%s)\n", config.quantization_level,
-           config.quantization_level == 0 ? "FP32" : (config.quantization_level == 1 ? "BF16" : (config.quantization_level == 2 ? "INT8" : "INT4")));
+           config.quantization_level == 0 ? "FP32" : (config.quantization_level == 1 ? "BF16" : "INT8"));
 
     // Read Vocabulary
     if (config.tokenizer_type == 0) {
@@ -303,7 +288,7 @@ bool GPTInference::load_model(const char* filepath) {
         return false;
     }
 
-    // Allocate memory for activations
+    // Allocate memory for activations (Internal fast SRAM)
     x_buffer = (float*)malloc(max_seq_len * embedding_dim * sizeof(float));
     x2_buffer = (float*)malloc(max_seq_len * embedding_dim * sizeof(float));
     qkv_buffer = (float*)malloc(max_seq_len * 4 * embedding_dim * sizeof(float)); // Shared MLP/QKV buffer
@@ -313,7 +298,7 @@ bool GPTInference::load_model(const char* filepath) {
         printf("[-] Error: Failed to allocate activation buffers in internal memory.\n");
         return false;
     }
-    printf("[+] Activation buffers allocated successfully.\n");
+    printf("[+] Activation buffers allocated successfully (~308 KB in internal memory).\n");
 
     return true;
 }
@@ -342,19 +327,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
         } else if (quant == 1) {
             const uint16_t* wte_data = (const uint16_t*)wte.data;
             for (int c = 0; c < C; ++c) x_row[c] = dequantize_bf16(wte_data[token * C + c]);
-        } else if (quant == 2) {
+        } else {
             const int8_t* wte_data = (const int8_t*)wte.data;
             for (int c = 0; c < C; ++c) x_row[c] = wte_data[token * C + c] * wte.scale;
-        } else {
-            const uint8_t* wte_data = (const uint8_t*)wte.data;
-            float scale = wte.scale;
-            for (int c = 0; c < C; ++c) {
-                size_t idx = token * C + c;
-                uint8_t b = wte_data[idx / 2];
-                uint8_t nibble = (idx % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                x_row[c] = q * scale;
-            }
         }
 
         // Lookup WPE
@@ -364,19 +339,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
         } else if (quant == 1) {
             const uint16_t* wpe_data = (const uint16_t*)wpe.data;
             for (int c = 0; c < C; ++c) x_row[c] += dequantize_bf16(wpe_data[t * C + c]);
-        } else if (quant == 2) {
+        } else {
             const int8_t* wpe_data = (const int8_t*)wpe.data;
             for (int c = 0; c < C; ++c) x_row[c] += wpe_data[t * C + c] * wpe.scale;
-        } else {
-            const uint8_t* wpe_data = (const uint8_t*)wpe.data;
-            float scale = wpe.scale;
-            for (int c = 0; c < C; ++c) {
-                size_t idx = t * C + c;
-                uint8_t b = wpe_data[idx / 2];
-                uint8_t nibble = (idx % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                x_row[c] += q * scale;
-            }
         }
     }
 
@@ -397,18 +362,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
             } else if (quant == 1) {
                 const uint16_t* b_qkv = (const uint16_t*)block.b_qkv.data;
                 for (int i = 0; i < 3 * C; ++i) qkv_row[i] += dequantize_bf16(b_qkv[i]);
-            } else if (quant == 2) {
+            } else {
                 const int8_t* b_qkv = (const int8_t*)block.b_qkv.data;
                 for (int i = 0; i < 3 * C; ++i) qkv_row[i] += b_qkv[i] * block.b_qkv.scale;
-            } else {
-                const uint8_t* b_qkv = (const uint8_t*)block.b_qkv.data;
-                float scale = block.b_qkv.scale;
-                for (int i = 0; i < 3 * C; ++i) {
-                    uint8_t b = b_qkv[i / 2];
-                    uint8_t nibble = (i % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    qkv_row[i] += q * scale;
-                }
             }
         }
 
@@ -452,18 +408,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
             } else if (quant == 1) {
                 const uint16_t* b_proj = (const uint16_t*)block.b_proj.data;
                 for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + dequantize_bf16(b_proj[c]);
-            } else if (quant == 2) {
+            } else {
                 const int8_t* b_proj = (const int8_t*)block.b_proj.data;
                 for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj[c] * block.b_proj.scale;
-            } else {
-                const uint8_t* b_proj = (const uint8_t*)block.b_proj.data;
-                float scale = block.b_proj.scale;
-                for (int c = 0; c < C; ++c) {
-                    uint8_t b = b_proj[c / 2];
-                    uint8_t nibble = (c % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    x_row[c] += proj_row[c] + q * scale;
-                }
             }
         }
 
@@ -480,18 +427,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
             } else if (quant == 1) {
                 const uint16_t* b_fc = (const uint16_t*)block.b_fc.data;
                 for (int i = 0; i < 4 * C; ++i) fc_row[i] += dequantize_bf16(b_fc[i]);
-            } else if (quant == 2) {
+            } else {
                 const int8_t* b_fc = (const int8_t*)block.b_fc.data;
                 for (int i = 0; i < 4 * C; ++i) fc_row[i] += b_fc[i] * block.b_fc.scale;
-            } else {
-                const uint8_t* b_fc = (const uint8_t*)block.b_fc.data;
-                float scale = block.b_fc.scale;
-                for (int i = 0; i < 4 * C; ++i) {
-                    uint8_t b = b_fc[i / 2];
-                    uint8_t nibble = (i % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    fc_row[i] += q * scale;
-                }
             }
         }
         gelu(qkv_buffer, T * 4 * C);
@@ -507,18 +445,9 @@ void GPTInference::forward(const int* input_tokens, int T, float* out_logits) {
             } else if (quant == 1) {
                 const uint16_t* b_proj_mlp = (const uint16_t*)block.b_proj_mlp.data;
                 for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + dequantize_bf16(b_proj_mlp[c]);
-            } else if (quant == 2) {
+            } else {
                 const int8_t* b_proj_mlp = (const int8_t*)block.b_proj_mlp.data;
                 for (int c = 0; c < C; ++c) x_row[c] += proj_row[c] + b_proj_mlp[c] * block.b_proj_mlp.scale;
-            } else {
-                const uint8_t* b_proj_mlp = (const uint8_t*)block.b_proj_mlp.data;
-                float scale = block.b_proj_mlp.scale;
-                for (int c = 0; c < C; ++c) {
-                    uint8_t b = b_proj_mlp[c / 2];
-                    uint8_t nibble = (c % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    x_row[c] += proj_row[c] + q * scale;
-                }
             }
         }
     }
@@ -570,25 +499,7 @@ void GPTInference::matmul(const float* A, const QuantizedTensor& B, float* C, in
                 }
             }
         }
-        float scale = B.scale;
-        for (int i = 0; i < M * N; ++i) {
-            C[i] *= scale;
-        }
-    } else if (quant_level == 3) {
-        const uint8_t* B_data = (const uint8_t*)B.data;
-        for (int i = 0; i < M; ++i) {
-            for (int k = 0; k < K; ++k) {
-                float val = A[i * K + k];
-                float* c_row = C + i * N;
-                for (int j = 0; j < N; ++j) {
-                    size_t idx = k * N + j;
-                    uint8_t b = B_data[idx / 2];
-                    uint8_t nibble = (idx % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    c_row[j] += val * q;
-                }
-            }
-        }
+        // Multiply entire output by scale factor
         float scale = B.scale;
         for (int i = 0; i < M * N; ++i) {
             C[i] *= scale;
@@ -640,25 +551,6 @@ void GPTInference::matmul_transposed_b(const float* A, const QuantizedTensor& B,
                 c_row[j] = sum * scale;
             }
         }
-    } else if (quant_level == 3) {
-        const uint8_t* B_data = (const uint8_t*)B.data;
-        float scale = B.scale;
-        for (int i = 0; i < M; ++i) {
-            const float* a_row = A + i * K;
-            float* c_row = C + i * N;
-            for (int j = 0; j < N; ++j) {
-                const uint8_t* b_row = B_data + j * K;
-                float sum = 0.0f;
-                for (int k = 0; k < K; ++k) {
-                    size_t idx = j * K + k;
-                    uint8_t b = b_row[idx / 2];
-                    uint8_t nibble = (idx % 2 == 0) ? ((b >> 4) & 0x0F) : (b & 0x0F);
-                    int8_t q = (nibble & 0x08) ? (int8_t)(nibble | 0xF0) : (int8_t)nibble;
-                    sum += a_row[k] * q;
-                }
-                c_row[j] = sum * scale;
-            }
-        }
     }
 }
 
@@ -699,24 +591,6 @@ void GPTInference::layernorm(const float* x, const QuantizedTensor& gamma, const
             float b_scale = beta.scale;
             for (int c = 0; c < C; ++c) {
                 out_row[c] = (x_row[c] - mean) * std_dev * (g_data[c] * g_scale) + (b_data[c] * b_scale);
-            }
-        } else if (quant_level == 3) {
-            const uint8_t* g_data = (const uint8_t*)gamma.data;
-            const uint8_t* b_data = (const uint8_t*)beta.data;
-            float g_scale = gamma.scale;
-            float b_scale = beta.scale;
-            for (int c = 0; c < C; ++c) {
-                uint8_t gb = g_data[c / 2];
-                uint8_t gn = (c % 2 == 0) ? ((gb >> 4) & 0x0F) : (gb & 0x0F);
-                int8_t gq = (gn & 0x08) ? (int8_t)(gn | 0xF0) : (int8_t)gn;
-                float g_val = gq * g_scale;
-
-                uint8_t bb = b_data[c / 2];
-                uint8_t bn = (c % 2 == 0) ? ((bb >> 4) & 0x0F) : (bb & 0x0F);
-                int8_t bq = (bn & 0x08) ? (int8_t)(bn | 0xF0) : (int8_t)bn;
-                float b_val = bq * b_scale;
-
-                out_row[c] = (x_row[c] - mean) * std_dev * g_val + b_val;
             }
         }
     }
