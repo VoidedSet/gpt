@@ -14,7 +14,7 @@ struct GPTConfig {
     int num_heads;
     int num_layers;
     int tokenizer_type;     // 0 = CHAR, 1 = BPE
-    int quantization_level; // 0 = FP32, 1 = BF16, 2 = INT8, 3 = INT4
+    int quantization_level; // 0 = FP32, 1 = BF16, 2 = INT8
 };
 
 struct QuantizedTensor {
