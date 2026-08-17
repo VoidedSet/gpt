@@ -113,6 +113,7 @@ def inspect_model(filepath):
         params_meta.append(("ln_f_beta", (embedding_dim,)))
 
         total_weights_count = 0
+        wte_weights = []
         
         print(f"{'Parameter Name':<30} | {'Shape':<15} | {'Scale Factor':<12} | {'Min':<8} | {'Max':<8} | {'Mean':<8}")
         print("=" * 95)
@@ -154,6 +155,9 @@ def inspect_model(filepath):
                 if padding > 0:
                     f.read(padding) # skip padding bytes
 
+            if name == "wte":
+                wte_weights = raw_weights
+
             # Calculate stats
             w_min = min(raw_weights)
             w_max = max(raw_weights)
@@ -172,6 +176,23 @@ def inspect_model(filepath):
             print(f"[!] Warning: There are {remaining} trailing bytes left unread in the file.")
         else:
             print("[+] Successfully parsed the entire binary file with 100% boundary check.")
+
+        # Visceral numerical proof: Output a small patch of floats!
+        if len(wte_weights) > 0:
+            print("\n" + "=" * 95)
+            print("🔢 VISCERAL NUMERICAL PROOF: A 5x5 Matrix Slice of Word Token Embeddings (wte)")
+            print("=" * 95)
+            print("Here are the actual float values stored inside the first 5 rows (tokens) and first 5 columns (dims):")
+            print("Row Index (Token) | Col 0     Col 1     Col 2     Col 3     Col 4")
+            print("-" * 75)
+            for token_id in range(5):
+                slice_vals = wte_weights[token_id * embedding_dim : token_id * embedding_dim + 5]
+                slice_str = "  ".join(f"{x:+9.6f}" for x in slice_vals)
+                print(f"  Token ID {token_id:03d}     | {slice_str}")
+            print("-" * 75)
+            print("Here is a raw list of the first 20 float numbers in the model:")
+            print(", ".join(f"{x:.6f}" for x in wte_weights[:20]))
+            print("=" * 95)
 
 if __name__ == "__main__":
     filepath = "dataset/macbeth2.bin"
