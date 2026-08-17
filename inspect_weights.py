@@ -190,8 +190,8 @@ def inspect_model(filepath):
                 slice_str = "  ".join(f"{x:+9.6f}" for x in slice_vals)
                 print(f"  Token ID {token_id:03d}     | {slice_str}")
             print("-" * 75)
-            print("Here is a raw list of the first 20 float numbers in the model:")
-            print(", ".join(f"{x:.6f}" for x in wte_weights[:20]))
+            print("Here is a raw list of the first 1000 float numbers in the model:")
+            print(", ".join(f"{x:.6f}" for x in wte_weights[:1000]))
             print("=" * 95)
 
 if __name__ == "__main__":
